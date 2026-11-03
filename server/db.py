@@ -13,6 +13,7 @@ CREATE TABLE IF NOT EXISTS devices (
     hostname    TEXT,
     name        TEXT,
     kind        TEXT NOT NULL DEFAULT 'autre',   -- console, pc, telephone, tv, autre
+    link        TEXT,                             -- wifi / filaire (si connu, via la Livebox)
     tracked     INTEGER NOT NULL DEFAULT 0,       -- affiché dans le suivi des temps
     daily_limit INTEGER,                          -- minutes par jour, optionnel
     first_seen  REAL NOT NULL,
@@ -41,26 +42,29 @@ class Store:
         self._db.execute("PRAGMA foreign_keys = ON")
         self._db.execute("PRAGMA journal_mode = WAL")
         self._db.executescript(SCHEMA)
+        cols = {r["name"] for r in self._db.execute("PRAGMA table_info(devices)")}
+        if "link" not in cols:  # migration des bases créées avant le support Livebox
+            self._db.execute("ALTER TABLE devices ADD COLUMN link TEXT")
 
     # --- enregistrement d'un scan -------------------------------------------------
-    def record_scan(self, seen: dict[str, str], hostnames: dict[str, str | None],
-                    now: float, grace: float) -> None:
+    def record_scan(self, seen: dict[str, dict], now: float, grace: float) -> None:
         """Met à jour les sessions à partir des appareils vus au temps `now`.
 
+        `seen` : {mac: {"ip", "hostname", "link", "kind"}} (seule "ip" est obligatoire).
         Une session reste ouverte tant que l'appareil réapparaît avant `grace`
         secondes ; au-delà, elle est close à la dernière détection.
         """
         with self._lock, self._db:
             db = self._db
-            for mac, ip in seen.items():
-                host = hostnames.get(mac)
+            for mac, info in seen.items():
                 db.execute(
-                    """INSERT INTO devices (mac, ip, hostname, first_seen, last_seen)
-                       VALUES (?, ?, ?, ?, ?)
+                    """INSERT INTO devices (mac, ip, hostname, link, kind, first_seen, last_seen)
+                       VALUES (?, ?, ?, ?, COALESCE(?, 'autre'), ?, ?)
                        ON CONFLICT(mac) DO UPDATE SET ip = excluded.ip,
                          hostname = COALESCE(excluded.hostname, devices.hostname),
+                         link = COALESCE(excluded.link, devices.link),
                          last_seen = excluded.last_seen""",
-                    (mac, ip, host, now, now),
+                    (mac, info.get("ip"), info.get("hostname"), info.get("link"), info.get("kind"), now, now),
                 )
                 row = db.execute(
                     "SELECT id, end FROM sessions WHERE mac = ? AND open = 1", (mac,)

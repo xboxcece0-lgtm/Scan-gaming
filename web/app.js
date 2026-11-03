@@ -29,6 +29,7 @@ function fmtTime(ts) {
 function esc(s) {
   return String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
+const linkLabel = (d) => d.link === "wifi" ? "📶 Wi‑Fi · " : d.link === "filaire" ? "🔌 Filaire · " : "";
 const displayName = (d) => d.name || d.hostname || d.ip || d.mac;
 
 async function api(path, opts = {}) {
@@ -113,7 +114,7 @@ function renderDevices() {
       <span class="dev-icon">${ICONS[d.kind] || "❔"}</span>
       <div style="flex:1;min-width:0">
         <div class="dev-name">${esc(displayName(d))}</div>
-        <div class="dev-sub">${esc(d.ip)} · ${esc(d.mac)}${d.hostname && d.name ? " · " + esc(d.hostname) : ""}</div>
+        <div class="dev-sub">${linkLabel(d)}${esc(d.ip)} · ${esc(d.mac)}${d.hostname && d.name ? " · " + esc(d.hostname) : ""}</div>
       </div>
       ${d.tracked ? "⏱" : ""}
     </div></div>`;
@@ -195,9 +196,10 @@ async function refresh() {
     else renderDevices();
     const s = $("#status");
     s.className = "status" + (status.last_error ? " err" : "");
-    s.textContent = status.last_error ? `Erreur de scan : ${status.last_error}`
-      : status.last_scan ? `Réseau ${status.network} · dernier scan à ${fmtTime(status.last_scan)} · toutes les ${status.interval} s`
-      : "Premier scan en cours…";
+    const src = status.source === "Livebox" ? "Livebox" : `scan du réseau ${status.network || ""}`;
+    s.textContent = status.last_error ? `⚠ ${status.last_error}`
+      : status.last_scan ? `Source : ${src} · dernier relevé à ${fmtTime(status.last_scan)} · toutes les ${status.interval} s`
+      : "Premier relevé en cours…";
   } catch (e) { showError(e); }
 }
 

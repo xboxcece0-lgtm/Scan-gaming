@@ -9,6 +9,10 @@ Variables d'environnement (toutes optionnelles) :
   DB_PATH        fichier SQLite (défaut data/scan-gaming.db)
   APP_PASSWORD   mot de passe de l'interface (authentification HTTP basique)
   RETENTION_DAYS durée de conservation de l'historique (défaut 400)
+  LIVEBOX_PASSWORD mot de passe administrateur de la Livebox : active la
+                 détection via la box (recommandé pour les Livebox Orange)
+  LIVEBOX_HOST   adresse de la Livebox (défaut 192.168.1.1)
+  LIVEBOX_USER   identifiant administrateur (défaut admin)
 """
 from __future__ import annotations
 
@@ -29,6 +33,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 sys.path.insert(0, str(Path(__file__).parent))
 import scanner  # noqa: E402
+from livebox import Livebox, LiveboxError, guess_kind  # noqa: E402
 from db import Store, day_bounds, overlap_seconds  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -39,24 +44,59 @@ PORT = int(os.environ.get("PORT", 8080))
 PASSWORD = os.environ.get("APP_PASSWORD", "")
 RETENTION = int(os.environ.get("RETENTION_DAYS", 400))
 DB_PATH = os.environ.get("DB_PATH", str(ROOT / "data" / "scan-gaming.db"))
+LIVEBOX_PASSWORD = os.environ.get("LIVEBOX_PASSWORD", "")
 
 log = logging.getLogger("scan-gaming")
-state = {"last_scan": None, "last_error": None, "network": None, "scanning": False}
+state = {"last_scan": None, "last_error": None, "network": None, "source": None, "scanning": False}
 scan_now = threading.Event()
 
 
-def scan_loop(store: Store, network: ipaddress.IPv4Network) -> None:
+class Detector:
+    """Choisit la source de détection : Livebox si configurée, sinon scan ARP."""
+
+    def __init__(self, store: Store):
+        self.store = store
+        self.box = Livebox(LIVEBOX_PASSWORD, os.environ.get("LIVEBOX_HOST", "192.168.1.1"),
+                           os.environ.get("LIVEBOX_USER", "admin")) if LIVEBOX_PASSWORD else None
+        net_env = os.environ.get("SCAN_NETWORK")
+        self._network = ipaddress.ip_network(net_env, strict=False) if net_env else None
+
+    @property
+    def network(self) -> ipaddress.IPv4Network:
+        if self._network is None:
+            self._network = scanner.detect_network()
+        return self._network
+
+    def detect(self) -> tuple[dict[str, dict], str | None]:
+        """Renvoie ({mac: infos}, avertissement éventuel)."""
+        warning = None
+        if self.box:
+            try:
+                found = self.box.active_devices()
+                state["source"] = "Livebox"
+                return {mac: {"ip": d["ip"], "hostname": d["name"], "link": d["link"],
+                              "kind": guess_kind(d["type"], d["name"])}
+                        for mac, d in found.items()}, None
+            except LiveboxError as exc:
+                warning = f"{exc} — repli sur le scan réseau"
+                log.warning(warning)
+        state["source"], state["network"] = "scan réseau", str(self.network)
+        known = self.store.known_hostnames()
+        return {mac: {"ip": ip, "hostname": known.get(mac) or scanner.reverse_dns(ip)}
+                for mac, ip in scanner.scan(self.network).items()}, warning
+
+
+def scan_loop(store: Store) -> None:
+    detector = Detector(store)
     last_purge = 0.0
     while True:
         started = time.time()
         state["scanning"] = True
         try:
-            seen = scanner.scan(network)
-            known = store.known_hostnames()
-            hosts = {mac: (known.get(mac) or scanner.reverse_dns(ip)) for mac, ip in seen.items()}
-            store.record_scan(seen, hosts, time.time(), GRACE)
-            state["last_scan"], state["last_error"] = time.time(), None
-            log.info("scan: %d appareil(s) en ligne", len(seen))
+            seen, warning = detector.detect()
+            store.record_scan(seen, time.time(), GRACE)
+            state["last_scan"], state["last_error"] = time.time(), warning
+            log.info("scan (%s) : %d appareil(s) en ligne", state["source"], len(seen))
             if time.time() - last_purge > 86400:
                 store.purge_older_than(RETENTION)
                 last_purge = time.time()
@@ -213,14 +253,12 @@ class Handler(BaseHTTPRequestHandler):
 
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    net_env = os.environ.get("SCAN_NETWORK")
-    network = ipaddress.ip_network(net_env, strict=False) if net_env else scanner.detect_network()
-    state["network"] = str(network)
     Path(DB_PATH).parent.mkdir(parents=True, exist_ok=True)
     store = Store(DB_PATH)
     Handler.store = store
-    threading.Thread(target=scan_loop, args=(store, network), daemon=True).start()
-    log.info("réseau scanné : %s — interface sur http://0.0.0.0:%d", network, PORT)
+    threading.Thread(target=scan_loop, args=(store,), daemon=True).start()
+    log.info("détection via %s — interface sur http://0.0.0.0:%d",
+             "la Livebox" if LIVEBOX_PASSWORD else "scan réseau", PORT)
     ThreadingHTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
 
 

@@ -26,6 +26,33 @@ Scan Gaming est donc découpé en deux :
  └──────────────────────────┘
 ```
 
+## Livebox Orange (recommandé)
+
+Avec une Livebox (5, 6, 7…), le collecteur peut demander directement à la box
+la liste des appareils connectés, au lieu de scanner le réseau. C'est plus fiable :
+la box sait exactement qui est associé au Wi‑Fi ou branché sur ses ports. Elle
+fournit aussi le nom de chaque appareil (ex. `PS5-123`, `DESKTOP-HUGO`), son
+type, et indique si la connexion est en Wi‑Fi ou filaire.
+
+Il suffit de renseigner le **mot de passe administrateur** de la Livebox, celui
+qui sert à se connecter à http://192.168.1.1. Si vous ne l'avez jamais changé,
+ce sont les **8 premiers caractères de la clé Wi‑Fi** imprimée sous la box.
+
+```bash
+# test rapide : affiche les appareils connectés vus par la box
+LIVEBOX_PASSWORD=xxxxxxxx python3 server/livebox.py
+```
+
+Puis décommentez `LIVEBOX_PASSWORD` dans `docker-compose.yml`, ou lancez
+`LIVEBOX_PASSWORD=xxxxxxxx python3 server/app.py`.
+
+Si la box ne répond pas (redémarrage, mauvais mot de passe…), le collecteur
+repasse automatiquement en scan réseau et l'indique en bas de l'écran.
+
+> En mode Livebox, le collecteur n'a plus besoin de lire la table ARP. Il peut
+> donc tourner sur **n'importe quel ordinateur allumé en permanence**, y compris
+> un PC Windows ou un Mac (Python installé, ou Docker Desktop).
+
 ## Installation
 
 Prérequis : une machine **Linux** reliée au réseau de la maison et allumée en
@@ -66,6 +93,9 @@ python3 server/app.py
 | `PORT` | `8080` | Port de l'interface web |
 | `DB_PATH` | `data/scan-gaming.db` | Base SQLite |
 | `RETENTION_DAYS` | `400` | Durée de conservation de l'historique |
+| `LIVEBOX_PASSWORD` | – | Mot de passe admin de la Livebox : active la détection via la box |
+| `LIVEBOX_HOST` | `192.168.1.1` | Adresse de la Livebox |
+| `LIVEBOX_USER` | `admin` | Identifiant administrateur |
 
 ## Fonctionnement et limites à connaître
 
@@ -74,12 +104,13 @@ python3 server/app.py
 - **Connexion ≠ jeu** : une console en **mode repos** (PS5, Xbox « instant-on ») reste connectée au réseau pour les mises à jour. Elle est alors comptée comme « en ligne ». Pour une mesure fiable, désactivez la connexion Internet en mode repos dans les réglages d'économie d'énergie de la console, ou choisissez l'arrêt complet / le mode économie d'énergie.
 - **Adresses MAC privées** : iPhone, iPad et Android récents changent régulièrement d'adresse MAC (« adresse Wi‑Fi privée »). Ils peuvent donc apparaître plusieurs fois. Les consoles et les PC ne sont pas concernés.
 - **Réseau invité** : un appareil branché sur le Wi‑Fi invité de la box est souvent isolé et invisible depuis le réseau principal.
-- Le collecteur doit être sur le **même réseau local** que les consoles. Docker doit tourner en `network_mode: host` (Linux uniquement : Docker Desktop sur Mac/Windows ne le permet pas).
+- Le collecteur doit être sur le **même réseau local** que les consoles. En mode scan réseau (sans Livebox), Docker doit tourner en `network_mode: host` (Linux uniquement).
 
 ## Structure
 
 ```
-server/scanner.py   détection réseau (ping + table ARP)
+server/livebox.py   détection via l'API locale de la Livebox Orange
+server/scanner.py   détection réseau (ping + table ARP), utilisée sans Livebox
 server/db.py        stockage SQLite, sessions, calcul des durées
 server/app.py       boucle de scan + API JSON + fichiers web
 web/                interface (PWA installable sur iPhone)
