@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import urllib.error
 import urllib.request
 
@@ -32,6 +33,14 @@ KIND_HINTS = (
     ("laptop", "pc"), ("desktop", "pc"), ("mobile", "telephone"),
     ("phone", "telephone"), ("tablet", "tablette"), ("tv", "tv"), ("stb", "tv"),
 )
+
+
+def clean_name(name: str | None) -> str | None:
+    """Décode les noms échappés par la box (« \\040none\\041 » = « none! »)."""
+    name = re.sub(r"\\([0-7]{3})", lambda m: chr(int(m.group(1), 8)), name or "").strip(" !")
+    if not name or re.fullmatch(r"none(-\d+)?|unknown.*|\??", name, re.I):
+        return None
+    return name
 
 
 class LiveboxError(Exception):
@@ -130,7 +139,7 @@ class Livebox:
                     continue
                 found[mac] = {
                     "ip": d.get("IPAddress") or "",
-                    "name": d.get("Name") or None,
+                    "name": clean_name(d.get("Name")),
                     "type": d.get("DeviceType") or None,
                     "link": "wifi" if link == "wifi" else "filaire" if link == "eth" else None,
                 }

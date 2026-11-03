@@ -5,10 +5,14 @@ le débit qu'ils consomment à l'instant t. Fichier autonome : aucune
 installation, il suffit de le copier dans a-Shell et de lancer
     python3 trafic.py
 L'iPhone doit être connecté au Wi‑Fi de la maison. Ctrl‑C (ou fermer a-Shell)
-pour arrêter. `python3 trafic.py --debug` affiche les réponses brutes de la box.
+pour arrêter.
+    python3 trafic.py --liste   liste complète des appareils (nom, IP, MAC)
+    python3 trafic.py --debug   réponses brutes de la box, pour diagnostic
 """
 import json
 import os
+import re
+import shutil
 import sys
 import time
 import urllib.error
@@ -20,6 +24,17 @@ REFRESH = 5
 PWD_FILE = os.path.expanduser("~/Documents/.livebox_mdp")
 CT = "application/x-sah-ws-1-call+json"
 WIDTH = 44  # largeur d'un iPhone en portrait dans a-Shell
+ACTIVE_BPS = 50_000  # en dessous de 50 kbit/s, l'appareil est considéré au repos
+CLEAR = "\033[3J\033[H\033[2J"  # efface l'écran ET l'historique (sinon a-Shell empile)
+
+
+def clean_name(name, ip, mac):
+    """Décode les noms échappés par la box (« \\040none\\041 ») et nomme les anonymes."""
+    name = re.sub(r"\\([0-7]{3})", lambda m: chr(int(m.group(1), 8)), name or "").strip(" !")
+    if not name or re.fullmatch(r"none(-\d+)?|unknown.*|\??", name, re.I):
+        suffix = f".{ip.rsplit('.', 1)[-1]}" if ip else mac[-5:]
+        return f"inconnu {suffix}"
+    return name
 
 
 class BoxError(Exception):
@@ -95,7 +110,9 @@ def active_devices(box):
         for d in devs or []:
             mac = (d.get("PhysAddress") or d.get("Key") or "").upper()
             if mac:
-                out[mac] = {"name": d.get("Name") or d.get("IPAddress") or mac,
+                ip = d.get("IPAddress") or ""
+                out[mac] = {"name": clean_name(d.get("Name"), ip, mac), "ip": ip,
+                            "type": d.get("DeviceType") or "",
                             "link": "wifi" if link == "wifi" else "fil"}
     return out
 
@@ -163,6 +180,15 @@ def main():
             os.remove(PWD_FILE)
         sys.exit(f"Erreur : {e}")
 
+    if "--liste" in sys.argv:
+        devs = active_devices(box)
+        print(f"{len(devs)} appareils connectés :\n")
+        for mac, d in sorted(devs.items(), key=lambda x: tuple(int(p) for p in x[1]["ip"].split(".") if p.isdigit())):
+            icon = "📶" if d["link"] == "wifi" else "🔌"
+            print(f"{icon}{d['name'][:26]}\n   {d['ip']}  {mac}\n   {d['type']}")
+        box.logout()
+        return
+
     if debug:
         for args in (("Devices", "get", {"expression": {"eth": "eth && .Active==true"}}),
                      ("NeMo.Intf.lan", "getMIBs", {"mibs": "wlanvap"})):
@@ -206,18 +232,31 @@ def main():
             prev, prev_t = counters, now
             rows.sort(key=lambda r: r[0], reverse=True)
 
-            out = ["\033[2J\033[H" + f"Livebox · {time.strftime('%H:%M:%S')} · {len(devs)} connectés",
+            first = not any(r[1] is not None for r in rows)
+            active = [r for r in rows if (r[1] or 0) + (r[2] or 0) >= ACTIVE_BPS]
+            unknown = [r[3]["name"] for r in rows if r[1] is None]
+            idle = len(rows) - len(active) - len(unknown)
+            height = shutil.get_terminal_size((WIDTH, 24)).lines
+            room = max(3, height - 9)  # place pour les lignes d'appareils actifs
+
+            out = [f"Livebox · {time.strftime('%H:%M:%S')} · {len(devs)} connectés",
                    f"{'Appareil':<22}  ↓ reçu  ↑ envoyé", "─" * WIDTH]
-            for _, down, up, d in rows:
+            if first:
+                out.append("Calcul des débits… (5 s)")
+            elif not active:
+                out.append("Aucun appareil actif en ce moment")
+            for _, down, up, d in active[:room]:
                 icon = "📶" if d["link"] == "wifi" else "🔌"
-                name = d["name"][:19]
-                out.append(f"{icon}{name:<20}{fmt(down)} {fmt(up)}")
-            if prev_t and not counters:
-                out.append("\n(débits Wi‑Fi indisponibles sur cette box)")
-            out.append("\n↓ = téléchargé par l'appareil · M = Mbit/s\n? = filaire sans statistique · Ctrl‑C pour quitter")
-            if len(rows) and all(r[1] is None for r in rows):
-                out.append("Calcul des débits… (premier relevé)")
-            print("\n".join(out), flush=True)
+                out.append(f"{icon}{d['name'][:20]:<20}{fmt(down)} {fmt(up)}")
+            if len(active) > room:
+                out.append(f"  … et {len(active) - room} autre(s) actif(s)")
+            out.append("─" * WIDTH)
+            if not first:
+                out.append(f"💤 {idle} au repos (< 50 kbit/s)")
+                if unknown:
+                    out.append(f"❔ {len(unknown)} sans mesure : " + ", ".join(unknown)[:WIDTH * 2 - 20])
+            out.append("M = Mbit/s · Ctrl‑C pour quitter")
+            print(CLEAR + "\n".join(out), end="", flush=True)
             time.sleep(REFRESH)
     except KeyboardInterrupt:
         pass
