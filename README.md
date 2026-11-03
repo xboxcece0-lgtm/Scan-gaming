@@ -53,6 +53,20 @@ repasse automatiquement en scan réseau et l'indique en bas de l'écran.
 > donc tourner sur **n'importe quel ordinateur allumé en permanence**, y compris
 > un PC Windows ou un Mac (Python installé, ou Docker Desktop).
 
+## Trafic en direct sur l'iPhone, sans collecteur
+
+`iphone/trafic.py` affiche les appareils connectés à la Livebox et leur débit
+à l'instant t, directement sur l'iPhone, en attendant que le collecteur soit en place :
+
+1. Installez l'app gratuite **a-Shell** (App Store).
+2. Enregistrez `trafic.py` dans l'app Fichiers → Sur mon iPhone → **a-Shell**.
+3. Dans a-Shell, tapez `python3 trafic.py`, puis le mot de passe administrateur de la box.
+
+Le débit des appareils Wi‑Fi est calculé à partir des compteurs de la box. Pour
+les appareils filaires, la statistique n'est pas documentée par Orange : la box
+peut ne pas en fournir (affiché « ? »). `python3 trafic.py --debug` affiche les
+réponses brutes de la box pour diagnostic.
+
 ## Installation
 
 Prérequis : une machine **Linux** reliée au réseau de la maison et allumée en
