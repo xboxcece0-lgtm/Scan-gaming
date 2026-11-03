@@ -1,0 +1,16 @@
+services:
+  scan-gaming:
+    build: .
+    container_name: scan-gaming
+    restart: unless-stopped
+    # Le mode « host » est indispensable : le conteneur doit voir le réseau local
+    # (table ARP) et non un réseau Docker isolé. Fonctionne sous Linux
+    # (Raspberry Pi, NAS Synology/QNAP, serveur…).
+    network_mode: host
+    environment:
+      TZ: Europe/Paris
+      # SCAN_NETWORK: 192.168.1.0/24   # à préciser si la détection automatique se trompe
+      # SCAN_INTERVAL: 60
+      # APP_PASSWORD: choisissez-un-mot-de-passe
+    volumes:
+      - ./data:/data

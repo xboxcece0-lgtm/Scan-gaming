@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Scan Gaming</title>
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Scan Gaming">
+  <meta name="theme-color" content="#0f172a">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="apple-touch-icon" href="icon-180.png">
+  <link rel="icon" href="icon-512.png">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <h1>Scan Gaming</h1>
+    <button id="refresh" class="icon-btn" aria-label="Scanner maintenant" title="Scanner maintenant">⟳</button>
+  </header>
+
+  <nav class="day-nav" id="day-nav">
+    <button id="prev" aria-label="Jour précédent">‹</button>
+    <span id="day-label"></span>
+    <button id="next" aria-label="Jour suivant">›</button>
+  </nav>
+
+  <main>
+    <section id="view-today" class="view active"></section>
+    <section id="view-week" class="view"></section>
+    <section id="view-devices" class="view"></section>
+  </main>
+
+  <p id="status" class="status"></p>
+
+  <nav class="tabs">
+    <button data-view="today" class="active"><span>⏱</span>Temps</button>
+    <button data-view="week"><span>📊</span>Semaine</button>
+    <button data-view="devices"><span>📡</span>Appareils</button>
+  </nav>
+
+  <dialog id="edit">
+    <form method="dialog" id="edit-form">
+      <h2>Appareil</h2>
+      <p class="muted" id="edit-info"></p>
+      <label>Nom<input name="name" placeholder="ex. PS5 de Léo" autocomplete="off"></label>
+      <label>Type
+        <select name="kind">
+          <option value="console">🎮 Console</option>
+          <option value="pc">🖥 PC</option>
+          <option value="telephone">📱 Téléphone</option>
+          <option value="tablette">📲 Tablette</option>
+          <option value="tv">📺 TV / box</option>
+          <option value="autre">❔ Autre</option>
+        </select>
+      </label>
+      <label class="row"><input type="checkbox" name="tracked"> Suivre le temps de connexion</label>
+      <label>Limite quotidienne (minutes, vide = aucune)<input name="daily_limit" type="number" min="0" inputmode="numeric"></label>
+      <div class="actions">
+        <button value="save" class="primary" type="submit" style="order:4">Enregistrer</button>
+        <button value="cancel" type="submit" style="order:3">Annuler</button>
+        <span style="order:2"></span>
+        <button value="delete" class="danger" type="submit" style="order:1">Oublier</button>
+      </div>
+    </form>
+  </dialog>
+
+  <script src="app.js"></script>
+</body>
+</html>
