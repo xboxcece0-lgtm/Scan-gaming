@@ -28,6 +28,13 @@ CREATE TABLE IF NOT EXISTS sessions (
 );
 CREATE INDEX IF NOT EXISTS idx_sessions_mac_end ON sessions(mac, end);
 CREATE INDEX IF NOT EXISTS idx_sessions_open ON sessions(open);
+-- Temps « actif » : secondes par jour où l'appareil consommait du trafic
+CREATE TABLE IF NOT EXISTS activity (
+    mac     TEXT NOT NULL REFERENCES devices(mac) ON DELETE CASCADE,
+    day     TEXT NOT NULL,   -- AAAA-MM-JJ, heure locale
+    seconds REAL NOT NULL DEFAULT 0,
+    PRIMARY KEY (mac, day)
+);
 """
 
 EDITABLE = {"name", "kind", "tracked", "daily_limit"}
@@ -79,6 +86,23 @@ class Store:
             db.execute("UPDATE sessions SET open = 0 WHERE open = 1 AND ? - end > ?",
                        (now, grace))
 
+    def add_activity(self, macs: list[str], day: str, seconds: float) -> None:
+        with self._lock, self._db:
+            for mac in macs:
+                self._db.execute(
+                    """INSERT INTO activity (mac, day, seconds) SELECT ?, ?, ?
+                       WHERE EXISTS (SELECT 1 FROM devices WHERE mac = ?)
+                       ON CONFLICT(mac, day) DO UPDATE SET seconds = seconds + excluded.seconds""",
+                    (mac, day, seconds, mac))
+
+    def activity(self, first_day: str, last_day: str) -> dict[str, dict[str, float]]:
+        """{mac: {jour: secondes actives}} entre deux jours inclus."""
+        out: dict[str, dict[str, float]] = {}
+        with self._lock:
+            for r in self._db.execute("SELECT * FROM activity WHERE day BETWEEN ? AND ?", (first_day, last_day)):
+                out.setdefault(r["mac"], {})[r["day"]] = r["seconds"]
+        return out
+
     def known_hostnames(self) -> dict[str, str | None]:
         with self._lock:
             return {r["mac"]: r["hostname"] for r in self._db.execute("SELECT mac, hostname FROM devices")}
@@ -127,6 +151,7 @@ class Store:
         cutoff = time.time() - days * 86400
         with self._lock, self._db:
             self._db.execute("DELETE FROM sessions WHERE open = 0 AND end < ?", (cutoff,))
+            self._db.execute("DELETE FROM activity WHERE day < date(?, 'unixepoch', 'localtime')", (cutoff,))
 
 
 # --- calculs de durée --------------------------------------------------------------

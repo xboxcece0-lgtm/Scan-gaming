@@ -13,6 +13,9 @@ Variables d'environnement (toutes optionnelles) :
                  détection via la box (recommandé pour les Livebox Orange)
   LIVEBOX_HOST   adresse de la Livebox (défaut 192.168.1.1)
   LIVEBOX_USER   identifiant administrateur (défaut admin)
+  LIVE_INTERVAL  secondes entre deux relevés de trafic Livebox (défaut 10)
+  ACTIVE_KBPS    débit (kbit/s) à partir duquel un appareil compte comme
+                 « actif », c.-à-d. réellement utilisé (défaut 300)
 """
 from __future__ import annotations
 
@@ -45,19 +48,21 @@ PASSWORD = os.environ.get("APP_PASSWORD", "")
 RETENTION = int(os.environ.get("RETENTION_DAYS", 400))
 DB_PATH = os.environ.get("DB_PATH", str(ROOT / "data" / "scan-gaming.db"))
 LIVEBOX_PASSWORD = os.environ.get("LIVEBOX_PASSWORD", "")
+LIVE_INTERVAL = float(os.environ.get("LIVE_INTERVAL", 10))
+ACTIVE_BPS = float(os.environ.get("ACTIVE_KBPS", 300)) * 1000
 
 log = logging.getLogger("scan-gaming")
 state = {"last_scan": None, "last_error": None, "network": None, "source": None, "scanning": False}
+live: dict[str, dict] = {}  # {mac: {"down": bit/s, "up": bit/s}} — clients Wi‑Fi mesurés par la box
 scan_now = threading.Event()
 
 
 class Detector:
     """Choisit la source de détection : Livebox si configurée, sinon scan ARP."""
 
-    def __init__(self, store: Store):
+    def __init__(self, store: Store, box: Livebox | None):
         self.store = store
-        self.box = Livebox(LIVEBOX_PASSWORD, os.environ.get("LIVEBOX_HOST", "192.168.1.1"),
-                           os.environ.get("LIVEBOX_USER", "admin")) if LIVEBOX_PASSWORD else None
+        self.box = box
         net_env = os.environ.get("SCAN_NETWORK")
         self._network = ipaddress.ip_network(net_env, strict=False) if net_env else None
 
@@ -86,8 +91,36 @@ class Detector:
                 for mac, ip in scanner.scan(self.network).items()}, warning
 
 
-def scan_loop(store: Store) -> None:
-    detector = Detector(store)
+def traffic_loop(store: Store, box: Livebox) -> None:
+    """Relève les compteurs Wi‑Fi de la box pour le débit en direct et le temps actif."""
+    prev: dict[str, tuple[int, int]] = {}
+    prev_t = 0.0
+    while True:
+        try:
+            counters = box.wifi_counters()
+            now = time.time()
+            dt = now - prev_t
+            rates = {}
+            if prev and 0 < dt < 5 * LIVE_INTERVAL:  # ignore les trous (box redémarrée…)
+                for mac, (tx, rx) in counters.items():
+                    if mac in prev:
+                        rates[mac] = {"down": max(0, tx - prev[mac][0]) * 8 / dt,
+                                      "up": max(0, rx - prev[mac][1]) * 8 / dt}
+                active = [m for m, r in rates.items() if r["down"] + r["up"] >= ACTIVE_BPS]
+                if active:
+                    store.add_activity(active, date.today().isoformat(), dt)
+            live.clear()
+            live.update(rates)
+            prev, prev_t = counters, now
+        except Exception:  # la boucle principale signale déjà les erreurs de box
+            log.debug("relevé de trafic impossible", exc_info=True)
+            live.clear()
+            prev = {}
+        time.sleep(LIVE_INTERVAL)
+
+
+def scan_loop(store: Store, box: Livebox | None) -> None:
+    detector = Detector(store, box)
     last_purge = 0.0
     while True:
         started = time.time()
@@ -109,6 +142,16 @@ def scan_loop(store: Store) -> None:
         scan_now.clear()
 
 
+def with_live(devices: list[dict]) -> list[dict]:
+    """Ajoute le débit instantané et l'état « actif » aux appareils mesurés."""
+    for dev in devices:
+        r = live.get(dev["mac"]) if dev["online"] else None
+        dev["rate_down"] = round(r["down"]) if r else None
+        dev["rate_up"] = round(r["up"]) if r else None
+        dev["active_now"] = bool(r and r["down"] + r["up"] >= ACTIVE_BPS)
+    return devices
+
+
 def parse_day(value: str | None) -> date:
     return date.fromisoformat(value) if value else date.today()
 
@@ -118,12 +161,14 @@ def day_usage(store: Store, d: date) -> dict:
     by_mac: dict[str, list] = {}
     for s in store.sessions_between(start, end):
         by_mac.setdefault(s["mac"], []).append(s)
+    active = store.activity(d.isoformat(), d.isoformat())
     devices = []
-    for dev in store.devices():
+    for dev in with_live(store.devices()):
         sessions = by_mac.get(dev["mac"], [])
         devices.append({
             **dev,
             "seconds": round(overlap_seconds(sessions, start, end, INTERVAL)),
+            "active_seconds": round(active[dev["mac"]][d.isoformat()]) if dev["mac"] in active else None,
             "sessions": [
                 {"start": max(s["start"], start), "end": min(s["end"] + INTERVAL, end, time.time()),
                  "open": bool(s["open"])}
@@ -144,7 +189,9 @@ def week_usage(store: Store, last: date, days: int = 7) -> dict:
     bounds = [day_bounds(first + timedelta(days=i)) for i in range(days)]
     result = {mac: [round(overlap_seconds(ss, ds, de, INTERVAL)) for ds, de in bounds]
               for mac, ss in by_mac.items()}
-    return {"days": labels, "usage": result}
+    act = store.activity(labels[0], labels[-1])
+    active = {mac: [round(days_map.get(day, 0)) for day in labels] for mac, days_map in act.items()}
+    return {"days": labels, "usage": result, "active": active}
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -199,9 +246,10 @@ class Handler(BaseHTTPRequestHandler):
         q = {k: v[0] for k, v in parse_qs(url.query).items()}
         try:
             if url.path == "/api/status":
-                return self._json({**state, "interval": INTERVAL, "grace": GRACE})
+                return self._json({**state, "interval": INTERVAL, "grace": GRACE,
+                                   "live": bool(live), "active_kbps": ACTIVE_BPS / 1000})
             if url.path == "/api/devices":
-                return self._json(self.store.devices())
+                return self._json(with_live(self.store.devices()))
             if url.path == "/api/usage":
                 return self._json(day_usage(self.store, parse_day(q.get("day"))))
             if url.path == "/api/week":
@@ -256,7 +304,11 @@ def main() -> None:
     Path(DB_PATH).parent.mkdir(parents=True, exist_ok=True)
     store = Store(DB_PATH)
     Handler.store = store
-    threading.Thread(target=scan_loop, args=(store,), daemon=True).start()
+    box = Livebox(LIVEBOX_PASSWORD, os.environ.get("LIVEBOX_HOST", "192.168.1.1"),
+                  os.environ.get("LIVEBOX_USER", "admin")) if LIVEBOX_PASSWORD else None
+    threading.Thread(target=scan_loop, args=(store, box), daemon=True).start()
+    if box:
+        threading.Thread(target=traffic_loop, args=(store, box), daemon=True).start()
     log.info("détection via %s — interface sur http://0.0.0.0:%d",
              "la Livebox" if LIVEBOX_PASSWORD else "scan réseau", PORT)
     ThreadingHTTPServer(("0.0.0.0", PORT), Handler).serve_forever()

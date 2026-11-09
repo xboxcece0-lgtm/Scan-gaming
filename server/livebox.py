@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import threading
 import urllib.error
 import urllib.request
 
@@ -64,6 +65,7 @@ class Livebox:
         self.timeout = timeout
         self._context: str | None = None
         self._cookies: dict[str, str] = {}
+        self._lock = threading.RLock()  # partagé entre la boucle de scan et celle du trafic
 
     # --- transport ------------------------------------------------------------------
     def _cookie_header(self) -> str:
@@ -111,6 +113,10 @@ class Livebox:
         self._context = ctx
 
     def call(self, service: str, method: str, params: dict | None = None, _retry: bool = True):
+        with self._lock:
+            return self._call(service, method, params, _retry)
+
+    def _call(self, service: str, method: str, params: dict | None, _retry: bool):
         if not self._context:
             self.login()
         res = self._http("POST", "/ws", {"service": service, "method": method, "parameters": params or {}}, {
@@ -122,7 +128,7 @@ class Livebox:
         if result.get("errors"):
             if _retry:  # contexte expiré : on se reconnecte une fois
                 self._context = None
-                return self.call(service, method, params, _retry=False)
+                return self._call(service, method, params, False)
             raise LiveboxError(f"Livebox : {result['errors']}")
         return result.get("status")
 
@@ -144,6 +150,21 @@ class Livebox:
                     "link": "wifi" if link == "wifi" else "filaire" if link == "eth" else None,
                 }
         return found
+
+    def wifi_counters(self) -> dict[str, tuple[int, int]]:
+        """Compteurs d'octets cumulés des clients Wi‑Fi associés à la box.
+
+        {mac: (octets envoyés à l'appareil, octets reçus de l'appareil)}.
+        Les appareils filaires ou connectés via un répéteur n'y figurent pas.
+        """
+        status = self.call("NeMo.Intf.lan", "getMIBs", {"mibs": "wlanvap"}) or {}
+        out: dict[str, tuple[int, int]] = {}
+        for vap in (status.get("wlanvap") or {}).values():
+            for key, a in ((vap or {}).get("AssociatedDevice") or {}).items():
+                if isinstance(a, dict):
+                    mac = (a.get("MACAddress") or key).lower()
+                    out[mac] = (int(a.get("TxBytes") or 0), int(a.get("RxBytes") or 0))
+        return out
 
     def device_traffic(self, macs: list[str], readings: int = 4):
         """Statistiques de trafic par appareil (HomeLan), si la box les fournit.

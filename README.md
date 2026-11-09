@@ -73,7 +73,29 @@ Prérequis : une machine **Linux** reliée au réseau de la maison et allumée e
 permanence (Raspberry Pi, NAS Synology/QNAP avec Docker, mini‑PC…). Le
 collecteur consomme très peu de ressources.
 
-### Avec Docker (recommandé)
+### Sur un Raspberry Pi (recommandé)
+
+1. **Préparer la carte microSD** depuis un ordinateur avec [Raspberry Pi Imager](https://www.raspberrypi.com/software/) :
+   système « Raspberry Pi OS Lite (64-bit) ». Dans les réglages (⚙️ / « Modifier les réglages ») :
+   nom d'hôte `scangaming`, utilisateur `pi` + un mot de passe, fuseau `Europe/Paris`,
+   et dans l'onglet **Services** : **activer SSH** (authentification par mot de passe).
+2. Insérer la carte, **brancher le Pi à la Livebox avec un câble réseau**, puis l'alimenter. Attendre 2 minutes.
+3. **Se connecter au Pi depuis l'iPhone** : dans a-Shell, `ssh pi@scangaming.local`
+   (ou `ssh pi@<IP>` ; l'IP du Pi apparaît dans `python3 trafic.py --liste`).
+4. Sur le Pi :
+   ```bash
+   sudo apt-get update && sudo apt-get install -y git
+   git clone -b claude/nifty-heisenberg-gs8amu https://github.com/xboxcece0-lgtm/Scan-gaming.git
+   cd Scan-gaming && ./install.sh
+   ```
+   Le script demande le mot de passe de la Livebox (stocké dans `/etc/scan-gaming.env`,
+   lisible par root uniquement), installe un service qui démarre avec le Pi, et affiche l'adresse.
+5. Sur l'iPhone, ouvrir **http://scangaming.local** dans Safari → Partager → **Sur l'écran d'accueil**.
+
+Mise à jour : `cd ~/Scan-gaming && git pull && ./install.sh`.
+Journal en cas de souci : `journalctl -u scan-gaming -f`.
+
+### Avec Docker
 
 ```bash
 git clone <ce dépôt> scan-gaming && cd scan-gaming
@@ -110,11 +132,14 @@ python3 server/app.py
 | `LIVEBOX_PASSWORD` | – | Mot de passe admin de la Livebox : active la détection via la box |
 | `LIVEBOX_HOST` | `192.168.1.1` | Adresse de la Livebox |
 | `LIVEBOX_USER` | `admin` | Identifiant administrateur |
+| `LIVE_INTERVAL` | `10` | Secondes entre deux relevés de débit (Livebox) |
+| `ACTIVE_KBPS` | `300` | Débit au-delà duquel un appareil compte comme « utilisé » |
 
 ## Fonctionnement et limites à connaître
 
 - **Détection** : à chaque scan, le collecteur pingue toutes les adresses du sous-réseau, puis lit la table ARP (`ip neigh`). Une console qui ignore les pings est quand même détectée, parce qu'elle répond toujours à l'ARP. Les appareils sont identifiés par leur **adresse MAC**, donc un changement d'IP ne pose pas de problème.
 - **Précision** : environ ± 1 minute avec l'intervalle par défaut. Une coupure de moins de 3 minutes (`SCAN_GRACE`) ne coupe pas la session.
+- **Temps utilisé** : avec une Livebox, le débit de chaque appareil **Wi‑Fi connecté directement à la box** est relevé toutes les 10 s. Une minute où l'appareil échange plus de 300 kbit/s (`ACTIVE_KBPS`) compte comme « utilisée ». C'est ce temps qui est affiché et comparé à la limite quotidienne, plutôt que le simple temps de connexion. Les appareils filaires ou passant par un répéteur n'ont que le temps de connexion.
 - **Connexion ≠ jeu** : une console en **mode repos** (PS5, Xbox « instant-on ») reste connectée au réseau pour les mises à jour. Elle est alors comptée comme « en ligne ». Pour une mesure fiable, désactivez la connexion Internet en mode repos dans les réglages d'économie d'énergie de la console, ou choisissez l'arrêt complet / le mode économie d'énergie.
 - **Adresses MAC privées** : iPhone, iPad et Android récents changent régulièrement d'adresse MAC (« adresse Wi‑Fi privée »). Ils peuvent donc apparaître plusieurs fois. Les consoles et les PC ne sont pas concernés.
 - **Réseau invité** : un appareil branché sur le Wi‑Fi invité de la box est souvent isolé et invisible depuis le réseau principal.
