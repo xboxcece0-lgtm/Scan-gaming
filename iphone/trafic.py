@@ -10,6 +10,7 @@ pour arrêter.
     python3 trafic.py --debug   réponses brutes de la box, pour diagnostic
     python3 trafic.py --mesures quels appareils la box mesure, avec IPv4/IPv6
     python3 trafic.py --activer MAC  demande à la box de mesurer un appareil
+    python3 trafic.py --topologie    carte du réseau reconstruite par la box
 """
 import json
 import os
@@ -104,14 +105,21 @@ class Box:
 
 
 def active_devices(box):
-    st = box.call("Devices", "get", {"expression": {
-        "wifi": '.Active==true && wifi && (edev || hnid || wifi_bridge) and .PhysAddress!=""',
-        "eth": '.Active==true && eth && (edev || hnid) and .PhysAddress!=""'}}) or {}
+    expr = {"wifi": '.Active==true && wifi && (edev || hnid || wifi_bridge) and .PhysAddress!=""',
+            "eth": '.Active==true && eth && (edev || hnid) and .PhysAddress!=""',
+            "lan": '.Active==true && lan && physical and .PhysAddress!=""'}
+    try:
+        st = box.call("Devices", "get", {"expression": expr}) or {}
+    except BoxError:
+        expr.pop("lan")
+        st = box.call("Devices", "get", {"expression": expr}) or {}
+    if isinstance(st, dict) and "lan" in st:  # « wifi » / « eth » d'abord, « lan » complète
+        st = {k: st[k] for k in sorted(st, key=lambda k: k == "lan")}
     out = {}
     for link, devs in (st.items() if isinstance(st, dict) else [("?", st)]):
         for d in devs or []:
             mac = (d.get("PhysAddress") or d.get("Key") or "").upper()
-            if mac:
+            if mac and mac not in out and not set((d.get("Tags") or "").split()) & {"self", "hgw"}:
                 ip = d.get("IPAddress") or ""
                 out[mac] = {"name": clean_name(d.get("Name"), ip, mac), "ip": ip,
                             "type": d.get("DeviceType") or "",
@@ -262,6 +270,33 @@ def activer(box, mac):
     print(f"Mesures enregistrées pour {mac} : {stored()}")
 
 
+def diag_topologie(box):
+    """Affiche l'arbre brut du réseau reconstruit par la box (buildTopology)."""
+    print("Construction de la carte par la box (jusqu'à 30 s)…", flush=True)
+    st = box.call("TopologyDiagnostics", "buildTopology", {"Timeout": 30, "LLTDIcon": False, "SendXmlFile": False})
+    lines = []
+
+    def walk(n, depth=0):
+        if not isinstance(n, dict) or depth > 12:
+            return
+        tags = " ".join(t for t in (n.get("Tags") or "").split()
+                        if t in ("self", "hgw", "lan", "wifi", "eth", "vap", "bridge", "edev", "hnid", "ssw_sta", "physical"))
+        ssw = n.get("SSW", {}).get("CurrentMode") if isinstance(n.get("SSW"), dict) else ""
+        mac = (n.get("PhysAddress") or "")[-5:]
+        lines.append(f"{'  ' * depth}- {n.get('Name')!s:24} [{n.get('DeviceType') or '-'}] {mac} "
+                     f"{'actif' if n.get('Active') else 'inactif'} {ssw or ''} ({tags})")
+        for c in n.get("Children") or []:
+            walk(c, depth + 1)
+
+    for root in st if isinstance(st, list) else [st]:
+        walk(root)
+    print("\n".join(lines))
+    path = os.path.expanduser("~/diagnostic-topologie.txt")
+    with open(path, "w") as f:
+        f.write("\n".join(lines) + "\n")
+    print(f"\n=> Résultat enregistré dans {path}")
+
+
 def get_password():
     if os.environ.get("LIVEBOX_PASSWORD"):
         return os.environ["LIVEBOX_PASSWORD"]
@@ -301,6 +336,11 @@ def main():
         if i + 1 >= len(sys.argv):
             sys.exit("Usage : python3 trafic.py --activer 84:3A:5B:2C:74:3D")
         activer(box, sys.argv[i + 1])
+        box.logout()
+        return
+
+    if "--topologie" in sys.argv:
+        diag_topologie(box)
         box.logout()
         return
 

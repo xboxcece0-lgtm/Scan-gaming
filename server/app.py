@@ -37,7 +37,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 sys.path.insert(0, str(Path(__file__).parent))
 import scanner  # noqa: E402
-from livebox import READING_SECONDS, Livebox, LiveboxError, guess_kind  # noqa: E402
+from livebox import READING_SECONDS, Livebox, LiveboxError, clean_name, guess_kind  # noqa: E402
 from db import Store, day_bounds, overlap_seconds  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -56,6 +56,7 @@ ACTIVE_BPS = float(os.environ.get("ACTIVE_KBPS", 300)) * 1000
 log = logging.getLogger("scan-gaming")
 state = {"last_scan": None, "last_error": None, "network": None, "source": None, "scanning": False}
 live: dict[str, dict] = {}        # {mac: {"down": bit/s, "up": bit/s}} — clients Wi‑Fi (compteurs AP)
+topology: dict = {"tree": None, "updated": None, "error": None}  # carte reconstruite par la box
 live_homelan: dict[str, dict] = {}  # idem, autres appareils (relevés HomeLan de 30 s)
 scan_now = threading.Event()
 
@@ -209,6 +210,57 @@ def enforce_limits(store: Store, box: Livebox) -> None:
                 log.info("limite atteinte : accès Internet coupé pour %s", dev["name"] or mac)
             except LiveboxError as exc:
                 log.warning("coupure impossible pour %s : %s", mac, exc)
+
+
+IFACE_LABELS = (("vap6g", "📶 Wi‑Fi 6 GHz"), ("vap5g", "📶 Wi‑Fi 5 GHz"), ("vap2g", "📶 Wi‑Fi 2,4 GHz"), ("eth", "🔌 Port"))
+
+
+def simplify_topology(node: dict, depth: int = 0) -> list[dict]:
+    """Réduit l'arbre buildTopology à : box → interfaces → appareils (répéteurs, switchs…)."""
+    if depth > 12 or not isinstance(node, dict):
+        return []
+    kids = [k for c in (node.get("Children") or []) for k in simplify_topology(c, depth + 1)]
+    tags = set((node.get("Tags") or "").split())
+    name = node.get("Name") or ""
+    mac = (node.get("PhysAddress") or "").lower()
+    dtype = node.get("DeviceType") or ""
+    if "hgw" in tags:
+        return [{"type": "box", "name": "Livebox", "children": kids}]
+    if not mac or "self" in tags:  # nœud interne à la box (interface, pont…)
+        if name == "lan" or ("bridge" in tags and "vap" not in tags):
+            return kids  # nœud logique sans intérêt : on remonte ses enfants
+        if not kids:
+            return []
+        low = name.lower()
+        label = next((lbl for pre, lbl in IFACE_LABELS if low.startswith(pre)), None)
+        if label == "🔌 Port":
+            label = f"🔌 Port {name.upper()}"
+        if label and "guest" in low:
+            label += " (invité)"
+        if "switch" in (low + dtype.lower()):
+            return [{"type": "switch", "name": name or "Switch", "children": kids}]
+        return [{"type": "iface", "name": label or name, "children": kids}]
+    ssw = node.get("SSW") if isinstance(node.get("SSW"), dict) else {}
+    low = (name + " " + dtype).lower()
+    kind = ("repeater" if ssw.get("CurrentMode") == "Slave" or "repeteur" in low or "répéteur" in low
+            or "extender" in low or "wifi_bridge" in tags
+            else "switch" if "switch" in low else "device")
+    return [{"type": kind, "mac": mac, "name": clean_name(name) or mac, "dtype": dtype,
+             "active": bool(node.get("Active")), "children": kids}]
+
+
+def topology_loop(box: Livebox) -> None:
+    """Reconstruit la carte du réseau toutes les 5 minutes (la box met jusqu'à 30 s)."""
+    time.sleep(15)
+    while True:
+        try:
+            root = box.topology()
+            tree = simplify_topology(root) if root else []
+            topology.update(tree=tree[0] if tree else None, updated=time.time(), error=None)
+        except Exception as exc:
+            topology["error"] = str(exc)
+            log.debug("carte du réseau indisponible", exc_info=True)
+        time.sleep(300)
 
 
 def scan_loop(store: Store, box: Livebox | None) -> None:
@@ -384,6 +436,8 @@ class Handler(BaseHTTPRequestHandler):
                         self.store.set_blocked(mac, real, "manuel" if real else None)
                 detail = device_detail(self.store, mac, parse_day(q.get("day")))
                 return self._json(detail) if detail else self._json({"error": "appareil inconnu"}, 404)
+            if url.path == "/api/topology":
+                return self._json(topology)
             if url.path == "/api/week":
                 return self._json(week_usage(self.store, parse_day(q.get("day"))))
         except ValueError as exc:
@@ -477,6 +531,7 @@ def main() -> None:
     if box:
         threading.Thread(target=traffic_loop, args=(store, box), daemon=True).start()
         threading.Thread(target=homelan_loop, args=(store, box), daemon=True).start()
+        threading.Thread(target=topology_loop, args=(box,), daemon=True).start()
     log.info("détection via %s — interface sur http://0.0.0.0:%d",
              "la Livebox" if LIVEBOX_PASSWORD else "scan réseau", PORT)
     ThreadingHTTPServer(("0.0.0.0", PORT), Handler).serve_forever()

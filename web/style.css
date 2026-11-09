@@ -285,3 +285,7 @@ dialog::backdrop { background: rgba(5, 3, 18, .7); backdrop-filter: blur(3px); }
 .live-more summary::-webkit-details-marker { display: none; }
 .live-more summary::after { content: " ▸"; }
 .live-more[open] summary::after { content: " ▾"; }
+.node.offline { opacity: .45; }
+.node.infra { border-color: rgba(34, 211, 238, .5); color: #a5f3fc; font-weight: 600; }
+.toggle-off { display: flex; align-items: center; gap: 8px; margin: 4px 4px 0; font-size: 14px; color: var(--muted); }
+.toggle-off input { width: 18px; height: 18px; accent-color: var(--accent); }

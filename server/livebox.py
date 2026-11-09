@@ -26,8 +26,11 @@ ACTIVE_DEVICES = {
     "expression": {
         "wifi": '.Active==true && wifi && (edev || hnid || wifi_bridge) and .PhysAddress!=""',
         "eth": '.Active==true && eth && (edev || hnid) and .PhysAddress!=""',
+        # Appareils derrière un répéteur / une borne : ni « wifi » ni « eth » dans leurs étiquettes
+        "lan": '.Active==true && lan && physical and .PhysAddress!=""',
     }
 }
+ACTIVE_DEVICES_LEGACY = {"expression": {k: v for k, v in ACTIVE_DEVICES["expression"].items() if k != "lan"}}
 
 # Correspondance DeviceType Livebox -> type Scan Gaming (pré-remplissage).
 KIND_HINTS = (
@@ -141,24 +144,44 @@ class Livebox:
 
     # --- fonctions utiles -----------------------------------------------------------
     def active_devices(self) -> dict[str, dict]:
-        """Appareils actuellement connectés : {mac: {ip, name, type, link}}."""
-        status = self.call("Devices", "get", ACTIVE_DEVICES) or {}
+        """Appareils actuellement connectés : {mac: {ip, name, type, link, port, iface}}."""
+        try:
+            status = self.call("Devices", "get", ACTIVE_DEVICES) or {}
+        except LiveboxError:
+            status = self.call("Devices", "get", ACTIVE_DEVICES_LEGACY) or {}
         groups = status.items() if isinstance(status, dict) else [("?", status)]
         found: dict[str, dict] = {}
-        for link, devices in groups:
+        # « wifi » et « eth » d'abord : ils fixent le type de lien ; « lan » complète
+        for link, devices in sorted(groups, key=lambda g: g[0] == "lan"):
             for d in devices or []:
                 mac = (d.get("PhysAddress") or d.get("Key") or "").lower()
-                if not mac or not d.get("Active", True):
+                tags = set((d.get("Tags") or "").split())
+                if not mac or mac in found or not d.get("Active", True) or tags & {"self", "hgw"}:
                     continue
+                iface = d.get("InterfaceName") or ""
+                if link == "wifi" or (link != "eth" and (tags & {"wifi", "ssw_sta"} or iface.startswith("vap"))):
+                    kind = "wifi"
+                elif link == "eth" or "eth" in tags or iface.upper().startswith("ETH"):
+                    kind = "filaire"
+                else:
+                    kind = None
                 found[mac] = {
                     "ip": d.get("IPAddress") or "",
                     "name": clean_name(d.get("Name")),
                     "type": d.get("DeviceType") or None,
-                    "link": "wifi" if link == "wifi" else "filaire" if link == "eth" else None,
-                    "port": (d.get("InterfaceName") or "").upper() if link == "eth" else None,
-                    "iface": d.get("InterfaceName") or None,
+                    "link": kind,
+                    "port": iface.upper() if link == "eth" else None,
+                    "iface": iface or None,
                 }
         return found
+
+    def topology(self, timeout: int = 30) -> dict | None:
+        """Arbre du réseau tel que la box le reconstruit (carte de l'application Orange)."""
+        status = self.call("TopologyDiagnostics", "buildTopology",
+                           {"Timeout": timeout, "LLTDIcon": False, "SendXmlFile": False})
+        if isinstance(status, list) and status and isinstance(status[0], dict):
+            return status[0]
+        return None
 
     def wifi_counters(self) -> dict[str, tuple[int, int]]:
         """Compteurs d'octets cumulés des clients Wi‑Fi associés à la box.

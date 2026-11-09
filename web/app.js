@@ -228,6 +228,53 @@ function renderMap(devices) {
     ${offline ? `${offline} appareil(s) hors ligne masqué(s).` : ""}</p>`;
 }
 
+function renderTopo(tree, devices) {
+  // Carte reconstruite par la Livebox (comme l'application Orange), enrichie de nos noms et débits
+  const byMac = new Map(devices.map((d) => [d.mac, d]));
+  const seen = new Set();
+  const showOff = state.showOffline;
+  const rate = (d) => (d.rate_down || 0) + (d.rate_up || 0);
+  const icons = { box: "📦", repeater: "📡", switch: "🔀" };
+  const node = (n, depth = 0) => {
+    if (depth > 12) return "";
+    const kids = n.children.map((c) => node(c, depth + 1)).join("");
+    if (n.type === "box" || n.type === "iface") {
+      if (!kids) return "";
+      return n.type === "box" ? `<li><span class="node root">📦 Livebox</span><ul>${kids}</ul></li>`
+        : `<li><span class="node branch">${esc(n.name)}</span><ul>${kids}</ul></li>`;
+    }
+    if (n.mac) seen.add(n.mac);
+    const d = byMac.get(n.mac);
+    const online = d ? !!d.online : n.active;
+    if (!online && !showOff && !kids) return "";
+    const icon = icons[n.type] || (d ? ICONS[d.kind] : "❔") || "❔";
+    const name = d ? displayName(d) : n.name;
+    const live = d && d.active_now ? `<span class="live-txt">${fmtRate(rate(d))}</span>` : "";
+    const cls = `${online ? "" : "offline"} ${n.type === "device" ? "" : "infra"}`;
+    return `<li><span class="node ${d ? "tap-row" : ""} ${cls}" ${d ? `data-mac="${esc(d.mac)}"` : ""}>
+        <span class="dot ${d && d.active_now ? "live" : online ? "on" : ""}"></span> ${icon} ${esc(name)} ${live}</span>
+      ${kids ? `<ul>${kids}</ul>` : ""}</li>`;
+  };
+  const body = node(tree);
+  const missing = devices.filter((d) => d.online && !seen.has(d.mac));
+  const updated = state.topo.updated ? `Carte mise à jour à ${fmtTime(state.topo.updated)}.` : "";
+  return `<div class="card map"><ul class="tree">${body}
+      ${missing.length ? `<li><span class="node branch">❔ Hors carte (${missing.length})</span><ul>${missing.map((d) =>
+        `<li><span class="node tap-row" data-mac="${esc(d.mac)}"><span class="dot on"></span> ${ICONS[d.kind] || "❔"} ${esc(displayName(d))}</span></li>`).join("")}</ul></li>` : ""}
+    </ul></div>
+    <label class="toggle-off"><input type="checkbox" id="show-offline" ${showOff ? "checked" : ""}> Afficher les appareils déconnectés</label>
+    <p class="live-note">Carte reconstruite par la Livebox toutes les 5 minutes (comme dans l’application Orange). ${updated}</p>`;
+}
+
+document.addEventListener("change", (e) => {
+  if (e.target.id === "show-offline") {
+    state.showOffline = e.target.checked;
+    try { localStorage.setItem("showOffline", state.showOffline ? "1" : "0"); } catch {}
+    renderDevices();
+  }
+});
+try { state.showOffline = localStorage.getItem("showOffline") === "1"; } catch { state.showOffline = false; }
+
 function renderDevices() {
   const el = $("#view-devices");
   if (!state.devices.length) {
@@ -237,7 +284,10 @@ function renderDevices() {
   const seg = `<div class="seg">
     <button data-mode="list" class="${state.devMode !== "map" ? "on" : ""}">Liste</button>
     <button data-mode="map" class="${state.devMode === "map" ? "on" : ""}">Plan du réseau</button></div>`;
-  if (state.devMode === "map") { el.innerHTML = seg + renderMap(state.devices); return; }
+  if (state.devMode === "map") {
+    el.innerHTML = seg + (state.topo && state.topo.tree ? renderTopo(state.topo.tree, state.devices) : renderMap(state.devices));
+    return;
+  }
   const card = (d) => `<div class="card tap" data-mac="${esc(d.mac)}">
     <div class="dev-head">
       <span class="dot ${d.online ? "on" : ""}"></span>
@@ -261,7 +311,12 @@ function renderDevices() {
 
 document.addEventListener("click", (e) => {
   const b = e.target.closest(".seg button");
-  if (b) { state.devMode = b.dataset.mode; try { localStorage.setItem("devMode", state.devMode); } catch {} renderDevices(); }
+  if (b) {
+    state.devMode = b.dataset.mode;
+    try { localStorage.setItem("devMode", state.devMode); } catch {}
+    renderDevices();
+    if (state.devMode === "map") api("/api/topology").then((t) => { state.topo = t; renderDevices(); }).catch(() => {});
+  }
 });
 try { state.devMode = localStorage.getItem("devMode") || "list"; } catch { state.devMode = "list"; }
 
@@ -500,7 +555,10 @@ async function refresh() {
     state.status = status;
     if (state.view === "today") renderToday(await api(`/api/usage?day=${state.day}`));
     else if (state.view === "week") renderWeek(await api(`/api/week?day=${state.day}`));
-    else renderDevices();
+    else {
+      if (state.devMode === "map") state.topo = await api("/api/topology").catch(() => null);
+      renderDevices();
+    }
     const s = $("#status");
     s.className = "status" + (status.last_error ? " err" : "");
     const src = status.source === "Livebox" ? "Livebox" : `scan du réseau ${status.network || ""}`;
