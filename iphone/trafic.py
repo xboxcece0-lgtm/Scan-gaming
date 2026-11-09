@@ -9,6 +9,7 @@ pour arrêter.
     python3 trafic.py --liste   liste complète des appareils (nom, IP, MAC)
     python3 trafic.py --debug   réponses brutes de la box, pour diagnostic
     python3 trafic.py --mesures quels appareils la box mesure, avec IPv4/IPv6
+    python3 trafic.py --activer MAC  demande à la box de mesurer un appareil
 """
 import json
 import os
@@ -243,6 +244,24 @@ def diag_mesures(box):
     print(f"\n=> Résultat enregistré dans {path}")
 
 
+def activer(box, mac):
+    """Demande à la box d'(ré)inscrire un appareil dans ses relevés de trafic HomeLan."""
+    mac = mac.upper().replace("-", ":")
+    def stored():
+        res = box.call("HomeLan.Device", "get") or {}
+        v = res.get(mac) if isinstance(res, dict) else None
+        return v.get("NumberOfStoredMeasures") if isinstance(v, dict) else "absent"
+    print(f"Mesures enregistrées pour {mac} : {stored()}")
+    for method in ("addDevice",):
+        try:
+            print(f"HomeLan.{method} -> {json.dumps(box.call('HomeLan', method, {'macaddress': mac}))}")
+        except BoxError as e:
+            print(f"HomeLan.{method} -> ERREUR {e}")
+    print("Attente de 75 s (deux relevés de 30 s)…", flush=True)
+    time.sleep(75)
+    print(f"Mesures enregistrées pour {mac} : {stored()}")
+
+
 def get_password():
     if os.environ.get("LIVEBOX_PASSWORD"):
         return os.environ["LIVEBOX_PASSWORD"]
@@ -274,6 +293,14 @@ def main():
         for mac, d in sorted(devs.items(), key=lambda x: tuple(int(p) for p in x[1]["ip"].split(".") if p.isdigit())):
             icon = "📶" if d["link"] == "wifi" else "🔌"
             print(f"{icon}{d['name'][:26]}\n   {d['ip']}  {mac}\n   {d['type']}")
+        box.logout()
+        return
+
+    if "--activer" in sys.argv:
+        i = sys.argv.index("--activer")
+        if i + 1 >= len(sys.argv):
+            sys.exit("Usage : python3 trafic.py --activer 84:3A:5B:2C:74:3D")
+        activer(box, sys.argv[i + 1])
         box.logout()
         return
 
