@@ -97,3 +97,12 @@ dialog input[type=checkbox] { width: 22px; height: 22px; accent-color: var(--acc
 .legend { font-size: 12px; color: var(--muted); margin-top: 8px; display: flex; align-items: center; gap: 6px; }
 .legend .sw { width: 10px; height: 10px; border-radius: 2px; display: inline-block; background: var(--accent); }
 .legend .sw.conn { background: var(--track); margin-left: 8px; }
+
+/* --- grand écran (PC) : contenu centré, largeur de lecture confortable --- */
+@media (min-width: 700px) {
+  header, .day-nav, main, .status { max-width: 640px; margin-left: auto; margin-right: auto; }
+  header { padding-top: 24px; }
+  .tabs { left: 50%; right: auto; transform: translateX(-50%); width: 640px; border: 1px solid var(--line);
+    border-bottom: 0; border-radius: 14px 14px 0 0; }
+}
+.live-note { font-size: 12px; color: var(--muted); margin: -4px 4px 12px; }

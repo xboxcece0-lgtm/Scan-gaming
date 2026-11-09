@@ -65,7 +65,8 @@ function renderLive(devices) {
       <span class="live-rate">${fmtRate(d.rate_down + d.rate_up)}</span>
       <div class="live-bar"><div style="width:${((d.rate_down + d.rate_up) / max) * 100}%"></div></div>
     </div>`).join("") : `<div class="muted">Aucun appareil n’utilise Internet en ce moment.</div>`}
-    ${now.length > 8 ? `<div class="muted">… et ${now.length - 8} autres</div>` : ""}</div>`;
+    ${now.length > 8 ? `<div class="muted">… et ${now.length - 8} autres</div>` : ""}</div>
+    <p class="live-note">Débit mesuré pour les appareils en Wi‑Fi directement sur la box. Câble et répéteur : temps de connexion seulement.</p>`;
 }
 
 function renderToday(usage) {

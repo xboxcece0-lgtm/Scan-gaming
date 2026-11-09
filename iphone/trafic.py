@@ -158,12 +158,49 @@ def fmt(bps):
     return f"{bps / 1e3:5.0f} k"
 
 
+def diagnose(box):
+    """Cherche des statistiques de trafic pour les appareils filaires (non documentées)."""
+    lines = []
+
+    def show(title, fn, limit=1500):
+        try:
+            res = json.dumps(fn(), ensure_ascii=False)
+        except BoxError as e:
+            res = f"ERREUR {e}"
+        lines.append(f"--- {title}\n{res[:limit]}{' […]' if len(res) > limit else ''}")
+        print(lines[-1], flush=True)
+
+    devs = active_devices(box)
+    wired = [m for m, d in devs.items() if d["link"] == "fil"]
+    lines.append(f"--- {len(devs)} appareils, dont {len(wired)} filaires : " +
+                 ", ".join(f"{devs[m]['name']} ({m[-5:]})" for m in wired))
+    print(lines[-1])
+    show("HomeLan.getDevicesStatus", lambda: box.call("HomeLan", "getDevicesStatus"))
+    show("HomeLan.getDevicesReadingInterval", lambda: box.call("HomeLan", "getDevicesReadingInterval"))
+    show("HomeLan.getDevicesNames", lambda: box.call("HomeLan", "getDevicesNames"))
+    if wired:
+        m = wired[0]
+        for name in (m, m.lower()):
+            show(f"HomeLan.getDeviceResults {name[-5:]}", lambda n=name: box.call(
+                "HomeLan", "getDeviceResults", {"DeviceName": [n], "NumberOfReadings": 2}))
+        show("Devices.get filaire (1 appareil)", lambda: box.call(
+            "Devices", "get", {"expression": {"eth": f'eth && .PhysAddress=="{m}"'}}), 3000)
+    show("HomeLan.getResults (interfaces)", lambda: box.call("HomeLan", "getResults", {"NumberOfReadings": 1}))
+    path = os.path.expanduser("~/diagnostic-livebox.txt")
+    with open(path, "w") as f:
+        f.write("\n".join(lines) + "\n")
+    print(f"\n=> Résultat enregistré dans {path}")
+
+
 def get_password():
+    if os.environ.get("LIVEBOX_PASSWORD"):
+        return os.environ["LIVEBOX_PASSWORD"]
     if os.path.exists(PWD_FILE):
         with open(PWD_FILE) as f:
             return f.read().strip()
     pwd = input("Mot de passe administrateur de la Livebox : ").strip()
-    if input("Le mémoriser sur cet iPhone ? (o/n) ").strip().lower().startswith("o"):
+    if input("Le mémoriser sur cet appareil ? (o/n) ").strip().lower().startswith("o"):
+        os.makedirs(os.path.dirname(PWD_FILE), exist_ok=True)
         with open(PWD_FILE, "w") as f:
             f.write(pwd)
         os.chmod(PWD_FILE, 0o600)
@@ -190,20 +227,7 @@ def main():
         return
 
     if debug:
-        for args in (("Devices", "get", {"expression": {"eth": "eth && .Active==true"}}),
-                     ("NeMo.Intf.lan", "getMIBs", {"mibs": "wlanvap"})):
-            try:
-                print(f"--- {args[0]}.{args[1]}\n" + json.dumps(box.call(*args), indent=1)[:4000])
-            except BoxError as e:
-                print(f"--- {args[0]}.{args[1]} : {e}")
-        devs = active_devices(box)
-        wired = [m for m, d in devs.items() if d["link"] == "fil"]
-        try:
-            print("--- HomeLan.getDeviceResults\n" + json.dumps(
-                box.call("HomeLan", "getDeviceResults", {"DeviceName": wired, "NumberOfReadings": 1}),
-                indent=1)[:4000])
-        except BoxError as e:
-            print(f"--- HomeLan.getDeviceResults : {e}")
+        diagnose(box)
         box.logout()
         return
 
