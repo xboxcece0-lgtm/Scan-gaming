@@ -106,3 +106,28 @@ dialog input[type=checkbox] { width: 22px; height: 22px; accent-color: var(--acc
     border-bottom: 0; border-radius: 14px 14px 0 0; }
 }
 .live-note { font-size: 12px; color: var(--muted); margin: -4px 4px 12px; }
+
+/* --- En direct : appareils au repos / non mesurés --- */
+.live-sep { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; padding: 10px 0 2px; border-top: 1px solid var(--line); margin-top: 4px; }
+.live-row.idle { padding: 4px 0; font-size: 14px; color: var(--muted); }
+.live-row.idle + .live-row.idle { border-top: 0; }
+.live-row.idle .live-rate { font-weight: 400; }
+
+/* --- Appareils : sélecteur liste / plan --- */
+.seg { display: flex; background: var(--card); border-radius: 10px; padding: 3px; margin-bottom: 12px; }
+.seg button { flex: 1; padding: 8px; border-radius: 8px; font-size: 14px; color: var(--muted); }
+.seg button.on { background: var(--accent); color: #fff; font-weight: 600; }
+
+/* --- Plan du réseau (arbre) --- */
+.map { overflow-x: auto; }
+.tree, .tree ul { list-style: none; margin: 0; padding: 0; }
+.tree ul { margin-left: 12px; padding-left: 14px; border-left: 2px solid var(--line); }
+.tree li { position: relative; padding: 3px 0; }
+.tree ul > li::before { content: ""; position: absolute; left: -14px; top: 17px; width: 12px; border-top: 2px solid var(--line); }
+.tree ul > li:last-child::after { content: ""; position: absolute; left: -16px; top: 18px; bottom: 0; border-left: 2px solid var(--card); }
+.node { display: inline-flex; align-items: center; gap: 6px; padding: 5px 10px; border-radius: 8px; background: var(--bg); font-size: 14px; white-space: nowrap; }
+.node.tap-row { cursor: pointer; }
+.node.root { background: var(--accent); color: #fff; font-weight: 700; }
+.node.branch { font-weight: 600; }
+.node.group { border: 1px dashed var(--muted); background: transparent; }
+.node .live-txt { font-size: 12px; }

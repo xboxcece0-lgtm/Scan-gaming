@@ -81,7 +81,7 @@ class Detector:
                 found = self.box.active_devices()
                 state["source"] = "Livebox"
                 return {mac: {"ip": d["ip"], "hostname": d["name"], "link": d["link"],
-                              "kind": guess_kind(d["type"], d["name"])}
+                              "iface": d["iface"], "kind": guess_kind(d["type"], d["name"])}
                         for mac, d in found.items()}, None
             except LiveboxError as exc:
                 warning = f"{exc} — repli sur le scan réseau"
@@ -293,6 +293,9 @@ class Handler(BaseHTTPRequestHandler):
 
     # --- routes ---------------------------------------------------------------------
     def do_GET(self):
+        self._safe(self._do_GET)
+
+    def _do_GET(self):
         if not self._guard():
             return
         url = urlparse(self.path)
@@ -312,6 +315,9 @@ class Handler(BaseHTTPRequestHandler):
         return self._static(url.path)
 
     def do_POST(self):
+        self._safe(self._do_POST)
+
+    def _do_POST(self):
         if not self._guard():
             return
         if urlparse(self.path).path == "/api/scan":
@@ -320,6 +326,9 @@ class Handler(BaseHTTPRequestHandler):
         self._json({"error": "introuvable"}, 404)
 
     def do_PATCH(self):
+        self._safe(self._do_PATCH)
+
+    def _do_PATCH(self):
         if not self._guard():
             return
         path = urlparse(self.path).path
@@ -333,6 +342,9 @@ class Handler(BaseHTTPRequestHandler):
         self._json({"error": "introuvable"}, 404)
 
     def do_DELETE(self):
+        self._safe(self._do_DELETE)
+
+    def _do_DELETE(self):
         if not self._guard():
             return
         path = urlparse(self.path).path
@@ -340,6 +352,18 @@ class Handler(BaseHTTPRequestHandler):
             self.store.delete_device(unquote(path.rsplit("/", 1)[1]).lower())
             return self._json({"ok": True})
         self._json({"error": "introuvable"}, 404)
+
+    def _safe(self, handler) -> None:
+        try:
+            handler()
+        except (BrokenPipeError, ConnectionResetError):
+            pass  # le navigateur a fermé la connexion
+        except Exception as exc:
+            log.exception("erreur sur %s %s", self.command, self.path)
+            try:
+                self._json({"error": f"erreur interne : {exc}"}, 500)
+            except OSError:
+                pass
 
     def _static(self, path: str) -> None:
         rel = "index.html" if path in ("", "/") else path.lstrip("/")

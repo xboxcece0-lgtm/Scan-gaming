@@ -14,6 +14,8 @@ CREATE TABLE IF NOT EXISTS devices (
     name        TEXT,
     kind        TEXT NOT NULL DEFAULT 'autre',   -- console, pc, telephone, tv, autre
     link        TEXT,                             -- wifi / filaire (si connu, via la Livebox)
+    iface       TEXT,                             -- interface de la box (ETH0, vap5g0priv0…)
+    via         TEXT,                             -- saisi : switch / répéteur / appareil parent
     tracked     INTEGER NOT NULL DEFAULT 0,       -- affiché dans le suivi des temps
     daily_limit INTEGER,                          -- minutes par jour, optionnel
     first_seen  REAL NOT NULL,
@@ -37,7 +39,7 @@ CREATE TABLE IF NOT EXISTS activity (
 );
 """
 
-EDITABLE = {"name", "kind", "tracked", "daily_limit"}
+EDITABLE = {"name", "kind", "tracked", "daily_limit", "via"}
 KINDS = {"console", "pc", "telephone", "tablette", "tv", "autre"}
 
 
@@ -50,8 +52,9 @@ class Store:
         self._db.execute("PRAGMA journal_mode = WAL")
         self._db.executescript(SCHEMA)
         cols = {r["name"] for r in self._db.execute("PRAGMA table_info(devices)")}
-        if "link" not in cols:  # migration des bases créées avant le support Livebox
-            self._db.execute("ALTER TABLE devices ADD COLUMN link TEXT")
+        for col in ("link", "iface", "via"):  # migration des bases plus anciennes
+            if col not in cols:
+                self._db.execute(f"ALTER TABLE devices ADD COLUMN {col} TEXT")
 
     # --- enregistrement d'un scan -------------------------------------------------
     def record_scan(self, seen: dict[str, dict], now: float, grace: float) -> None:
@@ -65,13 +68,15 @@ class Store:
             db = self._db
             for mac, info in seen.items():
                 db.execute(
-                    """INSERT INTO devices (mac, ip, hostname, link, kind, first_seen, last_seen)
-                       VALUES (?, ?, ?, ?, COALESCE(?, 'autre'), ?, ?)
+                    """INSERT INTO devices (mac, ip, hostname, link, iface, kind, first_seen, last_seen)
+                       VALUES (?, ?, ?, ?, ?, COALESCE(?, 'autre'), ?, ?)
                        ON CONFLICT(mac) DO UPDATE SET ip = excluded.ip,
                          hostname = COALESCE(excluded.hostname, devices.hostname),
                          link = COALESCE(excluded.link, devices.link),
+                         iface = COALESCE(excluded.iface, devices.iface),
                          last_seen = excluded.last_seen""",
-                    (mac, info.get("ip"), info.get("hostname"), info.get("link"), info.get("kind"), now, now),
+                    (mac, info.get("ip"), info.get("hostname"), info.get("link"), info.get("iface"),
+                     info.get("kind"), now, now),
                 )
                 row = db.execute(
                     "SELECT id, end FROM sessions WHERE mac = ? AND open = 1", (mac,)
@@ -134,8 +139,9 @@ class Store:
         if "daily_limit" in fields:
             v = fields["daily_limit"]
             fields["daily_limit"] = int(v) if v not in (None, "", 0) else None
-        if "name" in fields:
-            fields["name"] = (fields["name"] or "").strip() or None
+        for key in ("name", "via"):
+            if key in fields:
+                fields[key] = (fields[key] or "").strip()[:60] or None
         with self._lock, self._db:
             if fields:
                 cols = ", ".join(f"{k} = ?" for k in fields)

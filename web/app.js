@@ -54,19 +54,27 @@ function statusLine(d) {
 }
 
 function renderLive(devices) {
-  // Tous les appareils (suivis ou non) qui consomment du trafic en ce moment
-  const now = devices.filter((d) => d.rate_down != null && d.rate_down + d.rate_up >= 50000)
-    .sort((a, b) => (b.rate_down + b.rate_up) - (a.rate_down + a.rate_up));
+  // Tous les appareils en ligne : actifs (barre), puis au repos, puis non mesurés
   if (!devices.some((d) => d.rate_down != null)) return "";
-  const max = Math.max(1e6, ...now.map((d) => d.rate_down + d.rate_up));
-  return `<div class="group-title">⚡ En direct</div><div class="card live-card">${now.length ? now.slice(0, 8).map((d) => `
-    <div class="live-row tap-row" data-mac="${esc(d.mac)}">
+  const rate = (d) => (d.rate_down || 0) + (d.rate_up || 0);
+  const online = devices.filter((d) => d.online);
+  const active = online.filter((d) => d.rate_down != null && rate(d) >= 50000).sort((a, b) => rate(b) - rate(a));
+  const idle = online.filter((d) => d.rate_down != null && rate(d) < 50000).sort((a, b) => rate(b) - rate(a));
+  const unmeasured = online.filter((d) => d.rate_down == null);
+  const max = Math.max(1e6, ...active.map(rate));
+  const row = (d, cls, right, bar) => `
+    <div class="live-row tap-row ${cls}" data-mac="${esc(d.mac)}">
       <span class="live-name">${ICONS[d.kind] || "❔"} ${esc(displayName(d))}</span>
-      <span class="live-rate">${fmtRate(d.rate_down + d.rate_up)}</span>
-      <div class="live-bar"><div style="width:${((d.rate_down + d.rate_up) / max) * 100}%"></div></div>
-    </div>`).join("") : `<div class="muted">Aucun appareil n’utilise Internet en ce moment.</div>`}
-    ${now.length > 8 ? `<div class="muted">… et ${now.length - 8} autres</div>` : ""}</div>
-    <p class="live-note">Débit relevé par la Livebox : toutes les 10 s pour le Wi‑Fi direct, 30 s pour le câble (switch compris). Derrière un répéteur, le trafic est attribué au répéteur : temps de connexion seulement.</p>`;
+      <span class="live-rate">${right}</span>
+      ${bar ? `<div class="live-bar"><div style="width:${(rate(d) / max) * 100}%"></div></div>` : ""}
+    </div>`;
+  return `<div class="group-title">⚡ En direct · ${online.length} en ligne</div><div class="card live-card">
+    ${active.length ? active.map((d) => row(d, "", fmtRate(rate(d)), true)).join("")
+      : `<div class="muted">Aucun appareil n’utilise Internet en ce moment.</div>`}
+    ${idle.length ? `<div class="live-sep">💤 Au repos (${idle.length})</div>` + idle.map((d) => row(d, "idle", rate(d) ? fmtRate(rate(d)) : "0")).join("") : ""}
+    ${unmeasured.length ? `<div class="live-sep">❔ Non mesurés (${unmeasured.length})</div>` + unmeasured.map((d) => row(d, "idle", "—")).join("") : ""}
+    </div>
+    <p class="live-note">Débit relevé par la Livebox : toutes les 10 s pour le Wi‑Fi direct, 30 s pour le câble (switch compris). « Non mesurés » : appareils derrière un répéteur (trafic attribué au répéteur) ou que la box ne mesure pas encore.</p>`;
 }
 
 function renderToday(usage) {
@@ -144,32 +152,102 @@ function renderWeek(week) {
 }
 
 // --- Vue « Appareils » ------------------------------------------------------------
+function ifaceLabel(d) {
+  const i = (d.iface || "").toLowerCase();
+  const guest = i.includes("guest") ? " (invité)" : "";
+  if (i.startsWith("vap6g")) return "📶 Wi‑Fi 6 GHz" + guest;
+  if (i.startsWith("vap5g")) return "📶 Wi‑Fi 5 GHz" + guest;
+  if (i.startsWith("vap2g")) return "📶 Wi‑Fi 2,4 GHz" + guest;
+  if (i.startsWith("eth")) return `🔌 Port Ethernet ${d.iface.toUpperCase()}`;
+  if (d.link === "wifi") return "📶 Wi‑Fi";
+  if (d.link === "filaire") return "🔌 Câble";
+  return "❔ Connexion inconnue";
+}
+
+function renderMap(devices) {
+  // Arbre : Livebox → interface de la box → « Connecté via » (switch, répéteur ou appareil) → appareils
+  const shown = devices.filter((d) => d.online);
+  const byName = new Map(shown.map((d) => [displayName(d).toLowerCase(), d]));
+  const children = new Map();   // mac d'un appareil parent → enfants
+  const groups = new Map();     // « Connecté via » qui n'est pas un appareil (switch…) → appareils
+  const branches = new Map();   // interface de la box → { groups: [noms], direct: [appareils] }
+  const branch = (key) => branches.get(key) || branches.set(key, { groups: [], direct: [] }).get(key);
+  for (const d of shown) {
+    const via = (d.via || "").trim();
+    const parent = via && byName.get(via.toLowerCase());
+    if (parent && parent !== d) (children.get(parent.mac) || children.set(parent.mac, []).get(parent.mac)).push(d);
+    else if (via) (groups.get(via) || groups.set(via, []).get(via)).push(d);
+    else branch(ifaceLabel(d)).direct.push(d);
+  }
+  // Un switch n'apparaît qu'une fois : sous l'interface la plus utilisée par ses appareils
+  // en câble (à défaut, par l'ensemble de ses appareils).
+  for (const [via, list] of groups) {
+    const wired = list.filter((d) => d.link === "filaire");
+    const count = new Map();
+    for (const d of (wired.length ? wired : list)) count.set(ifaceLabel(d), (count.get(ifaceLabel(d)) || 0) + 1);
+    branch([...count.entries()].sort((a, b) => b[1] - a[1])[0][0]).groups.push(via);
+  }
+  const rate = (d) => (d.rate_down || 0) + (d.rate_up || 0);
+  const node = (d, depth = 0) => {
+    const kids = depth < 4 ? (children.get(d.mac) || []) : [];
+    return `<li><span class="node tap-row" data-mac="${esc(d.mac)}">
+        <span class="dot ${d.active_now ? "live" : "on"}"></span> ${ICONS[d.kind] || "❔"} ${esc(displayName(d))}
+        ${d.active_now ? `<span class="live-txt">${fmtRate(rate(d))}</span>` : ""}</span>
+      ${kids.length ? `<ul>${kids.map((k) => node(k, depth + 1)).join("")}</ul>` : ""}</li>`;
+  };
+  const order = [...branches.keys()].sort((a, b) => (a.startsWith("🔌") - b.startsWith("🔌")) || a.localeCompare(b));
+  const offline = devices.length - shown.length;
+  return `<div class="card map"><ul class="tree"><li><span class="node root">📦 Livebox</span><ul>
+    ${order.map((k) => {
+      const br = branches.get(k);
+      const n = br.direct.length + br.groups.reduce((a, g) => a + groups.get(g).length, 0);
+      return `<li><span class="node branch">${k} <span class="muted">(${n})</span></span><ul>
+        ${br.groups.map((via) => `<li><span class="node group">🔀 ${esc(via)}</span>
+          <ul>${groups.get(via).map((d) => node(d)).join("")}</ul></li>`).join("")}
+        ${br.direct.map((d) => node(d)).join("")}</ul></li>`;
+    }).join("")}
+  </ul></li></ul></div>
+  <p class="live-note">Les switchs ne sont pas visibles par la box : touchez un appareil et renseignez
+    « Connecté via » (ex. « Switch chalet », ou le nom du répéteur) pour le placer sur le plan.
+    ${offline ? `${offline} appareil(s) hors ligne masqué(s).` : ""}</p>`;
+}
+
 function renderDevices() {
   const el = $("#view-devices");
   if (!state.devices.length) {
     el.innerHTML = `<div class="empty">Aucun appareil détecté pour l’instant.<br>Le premier scan prend environ une minute.</div>`;
     return;
   }
+  const seg = `<div class="seg">
+    <button data-mode="list" class="${state.devMode !== "map" ? "on" : ""}">Liste</button>
+    <button data-mode="map" class="${state.devMode === "map" ? "on" : ""}">Plan du réseau</button></div>`;
+  if (state.devMode === "map") { el.innerHTML = seg + renderMap(state.devices); return; }
   const card = (d) => `<div class="card tap" data-mac="${esc(d.mac)}">
     <div class="dev-head">
       <span class="dot ${d.online ? "on" : ""}"></span>
       <span class="dev-icon">${ICONS[d.kind] || "❔"}</span>
       <div style="flex:1;min-width:0">
         <div class="dev-name">${esc(displayName(d))}</div>
-        <div class="dev-sub">${linkLabel(d)}${esc(d.ip)} · ${esc(d.mac)}${d.hostname && d.name ? " · " + esc(d.hostname) : ""}</div>
+        <div class="dev-sub">${linkLabel(d)}${esc(d.ip)} · ${esc(d.mac)}${d.hostname && d.name ? " · " + esc(d.hostname) : ""}${d.via ? " · via " + esc(d.via) : ""}</div>
         ${d.active_now ? `<div class="dev-sub live-txt">⚡ ${fmtRate(d.rate_down + d.rate_up)}</div>` : ""}
       </div>
       ${d.tracked ? "⏱" : ""}
     </div></div>`;
   const tracked = state.devices.filter((d) => d.tracked);
   const others = state.devices.filter((d) => !d.tracked);
-  el.innerHTML =
+  el.innerHTML = seg +
     (tracked.length ? `<div class="group-title">Suivis</div>${tracked.map(card).join("")}` : "") +
     `<div class="group-title">Autres appareils (${others.length})</div>` +
     `<p class="muted" style="margin:0 4px 10px">Touchez un appareil pour le nommer et le suivre.
       Astuce : éteignez/allumez une console pour repérer laquelle c’est.</p>` +
     others.map(card).join("");
 }
+
+document.addEventListener("click", (e) => {
+  const b = e.target.closest(".seg button");
+  if (b) { state.devMode = b.dataset.mode; try { localStorage.setItem("devMode", state.devMode); } catch {} renderDevices(); }
+});
+try { state.devMode = localStorage.getItem("devMode") || "list"; } catch { state.devMode = "list"; }
 
 // --- Édition ----------------------------------------------------------------------
 function openEdit(mac) {
@@ -181,6 +259,11 @@ function openEdit(mac) {
   f.kind.value = d.kind || "autre";
   f.tracked.checked = !!d.tracked;
   f.daily_limit.value = d.daily_limit || "";
+  f.via.value = d.via || "";
+  const vias = new Set(state.devices.map((x) => x.via).filter(Boolean));
+  state.devices.filter((x) => x.mac !== d.mac && (x.kind === "autre" || /re305|répéteur|repeteur|switch/i.test(displayName(x))))
+    .forEach((x) => vias.add(displayName(x)));
+  $("#via-list").innerHTML = [...vias].map((v) => `<option value="${esc(v)}">`).join("");
   $("#edit-info").textContent = `${d.ip} · ${d.mac}${d.hostname ? " · " + d.hostname : ""} — vu pour la 1re fois le ${new Date(d.first_seen * 1000).toLocaleDateString("fr-FR")}`;
   $("#edit").showModal();
 }
@@ -192,7 +275,7 @@ $("#edit").addEventListener("close", async () => {
   try {
     if (action === "save") {
       await api(`/api/devices/${mac}`, { method: "PATCH", body: JSON.stringify({
-        name: f.name.value, kind: f.kind.value, tracked: f.tracked.checked,
+        name: f.name.value, kind: f.kind.value, tracked: f.tracked.checked, via: f.via.value,
         daily_limit: f.daily_limit.value ? Number(f.daily_limit.value) : null }) });
     } else if (action === "delete" && confirm("Oublier cet appareil et son historique ?")) {
       await api(`/api/devices/${mac}`, { method: "DELETE" });

@@ -151,6 +151,7 @@ class Livebox:
                     "type": d.get("DeviceType") or None,
                     "link": "wifi" if link == "wifi" else "filaire" if link == "eth" else None,
                     "port": (d.get("InterfaceName") or "").upper() if link == "eth" else None,
+                    "iface": d.get("InterfaceName") or None,
                 }
         return found
 
