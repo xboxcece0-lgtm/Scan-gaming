@@ -163,3 +163,15 @@ dialog input[type=checkbox] { width: 22px; height: 22px; accent-color: var(--acc
 .data-table table { width: 100%; border-collapse: collapse; margin-top: 6px; font-variant-numeric: tabular-nums; }
 .data-table th, .data-table td { text-align: right; padding: 3px 6px; border-bottom: 1px solid var(--line); }
 .data-table th:first-child, .data-table td:first-child { text-align: left; }
+
+/* --- coupure d'accès Internet --- */
+.blocked-banner { background: color-mix(in srgb, var(--bad) 14%, transparent); color: var(--bad); border: 1px solid color-mix(in srgb, var(--bad) 40%, transparent);
+  border-radius: 10px; padding: 8px 12px; margin: 10px 0 4px; font-weight: 600; font-size: 14px; }
+.blocked-banner small { font-weight: 400; }
+.blocked-txt { color: var(--bad); }
+.actions .danger-fill { background: var(--bad); color: #fff; }
+.actions .unblock { background: var(--ok); color: #fff; }
+dialog input[type=checkbox] { flex: none; }
+#detail .actions { flex-wrap: wrap; }
+#detail .actions button { flex: 1 1 auto; }
+#detail .actions span { display: none; }

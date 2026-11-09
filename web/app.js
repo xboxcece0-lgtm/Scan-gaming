@@ -104,7 +104,7 @@ function renderToday(usage) {
         <span class="dev-icon">${ICONS[d.kind] || "❔"}</span>
         <div style="flex:1;min-width:0">
           <div class="dev-name">${esc(displayName(d))}</div>
-          <div class="dev-sub">${isToday ? statusLine(d) : ""}</div>
+          <div class="dev-sub">${d.blocked ? `<b class="blocked-txt">⛔ Internet coupé</b>` : isToday ? statusLine(d) : ""}</div>
         </div>
         <div class="dev-times">
           <span class="dev-time">${fmtDur(main)}</span>
@@ -231,7 +231,7 @@ function renderDevices() {
         <div class="dev-sub">${linkLabel(d)}${esc(d.ip)} · ${esc(d.mac)}${d.hostname && d.name ? " · " + esc(d.hostname) : ""}${d.via ? " · via " + esc(d.via) : ""}</div>
         ${d.active_now ? `<div class="dev-sub live-txt">⚡ ${fmtRate(d.rate_down + d.rate_up)}</div>` : ""}
       </div>
-      ${d.tracked ? "⏱" : ""}
+      ${d.blocked ? "⛔" : ""}${d.tracked ? "⏱" : ""}
     </div></div>`;
   const tracked = state.devices.filter((d) => d.tracked);
   const others = state.devices.filter((d) => !d.tracked);
@@ -260,6 +260,8 @@ function openEdit(mac) {
   f.tracked.checked = !!d.tracked;
   f.daily_limit.value = d.daily_limit || "";
   f.via.value = d.via || "";
+  f.auto_block.checked = !!d.auto_block;
+  $("#auto-block-row").hidden = !(state.status && state.status.can_block);
   const vias = new Set(state.devices.map((x) => x.via).filter(Boolean));
   state.devices.filter((x) => x.mac !== d.mac && (x.kind === "autre" || /re305|répéteur|repeteur|switch/i.test(displayName(x))))
     .forEach((x) => vias.add(displayName(x)));
@@ -275,7 +277,7 @@ $("#edit").addEventListener("close", async () => {
   try {
     if (action === "save") {
       await api(`/api/devices/${mac}`, { method: "PATCH", body: JSON.stringify({
-        name: f.name.value, kind: f.kind.value, tracked: f.tracked.checked, via: f.via.value,
+        name: f.name.value, kind: f.kind.value, tracked: f.tracked.checked, via: f.via.value, auto_block: f.auto_block.checked,
         daily_limit: f.daily_limit.value ? Number(f.daily_limit.value) : null }) });
     } else if (action === "delete" && confirm("Oublier cet appareil et son historique ?")) {
       await api(`/api/devices/${mac}`, { method: "DELETE" });
@@ -362,9 +364,11 @@ function renderDetail(d) {
       <span class="dev-icon">${ICONS[d.kind] || "❔"}</span>
       <div style="flex:1;min-width:0">
         <h2 class="dev-name" style="margin:0">${esc(displayName(d))}</h2>
-        <div class="dev-sub">${d.day === todayISO() ? statusLine(d) : ""} ${d.via ? "· via " + esc(d.via) : ""}</div>
+        <div class="dev-sub">${d.blocked ? `<b class="blocked-txt">⛔ Internet coupé</b>` : d.day === todayISO() ? statusLine(d) : ""} ${d.via ? "· via " + esc(d.via) : ""}</div>
       </div>
     </div>
+    ${d.blocked ? `<div class="blocked-banner">⛔ Internet coupé ${d.blocked_by === "limite" ? "· limite atteinte" : "· manuellement"}
+        ${d.blocked_at ? "depuis " + fmtTime(d.blocked_at) : ""}${d.blocked_by === "limite" ? "<br><small>Rétabli automatiquement à minuit.</small>" : ""}</div>` : ""}
     <nav class="day-nav small">
       <button data-dday="-1" aria-label="Jour précédent">‹</button>
       <span>${dayLabel(d.day)}</span>
@@ -394,11 +398,24 @@ function renderDetail(d) {
       ${hours.filter((h) => h[1] + h[2] > 0).map((h) => `<tr><td>${h[0]} h</td><td>${fmtBytes(h[1])}</td><td>${fmtBytes(h[2])}</td></tr>`).join("")
         || `<tr><td colspan="3" class="muted">Aucune donnée</td></tr>`}</tbody></table></details>
     <div class="actions">
-      <button type="button" class="primary" data-act="edit" style="order:2">✏️ Modifier</button>
+      ${state.status && state.status.can_block ? (d.blocked
+        ? `<button type="button" class="unblock" data-act="unblock" style="order:0">✅ Rétablir Internet</button>`
+        : `<button type="button" class="danger-fill" data-act="block" style="order:0">⛔ Couper Internet</button>`) : ""}
       <span style="order:1"></span>
+      <button type="button" class="primary" data-act="edit" style="order:2">✏️ Modifier</button>
       <button type="button" data-act="close" style="order:3">Fermer</button>
     </div>`;
   bindChart();
+}
+
+async function toggleBlock(block) {
+  const d = state.detailData;
+  if (block && !confirm(`Couper l’accès Internet de « ${displayName(d)} » ?\n\nIl restera coupé jusqu’à ce que vous le rétablissiez.`)) return;
+  try {
+    await api(`/api/devices/${encodeURIComponent(d.mac)}/block`, { method: "POST", body: JSON.stringify({ blocked: block }) });
+    await loadDetail();
+    refresh();
+  } catch (e) { alert("La Livebox n’a pas accepté la demande : " + e.message); }
 }
 
 function bindChart() {
@@ -430,6 +447,7 @@ $("#detail").addEventListener("click", (e) => {
   if (nav) { state.detailDay = shiftDay(state.detailDay, Number(nav.dataset.dday)); loadDetail(); return; }
   const act = e.target.closest("[data-act]");
   if (!act) return;
+  if (act.dataset.act === "block" || act.dataset.act === "unblock") return toggleBlock(act.dataset.act === "block");
   $("#detail").close();
   if (act.dataset.act === "edit") openEdit(state.detailMac);
   else state.detailMac = null;
@@ -463,6 +481,7 @@ async function refresh() {
   try {
     const [status, devices] = await Promise.all([api("/api/status"), api("/api/devices")]);
     state.devices = devices;
+    state.status = status;
     if (state.view === "today") renderToday(await api(`/api/usage?day=${state.day}`));
     else if (state.view === "week") renderWeek(await api(`/api/week?day=${state.day}`));
     else renderDevices();

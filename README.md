@@ -119,6 +119,18 @@ python3 server/app.py
 
 > Pour repérer quelle ligne correspond à quelle console : éteignez-la complètement, attendez 3 minutes, rallumez-la. La pastille verte apparaît au scan suivant.
 
+## Couper Internet à un appareil
+
+Avec une Livebox, la fiche d'un appareil propose **⛔ Couper Internet** / **✅ Rétablir Internet**.
+Dans ses réglages, la case **« Couper Internet quand la limite est atteinte »** coupe
+automatiquement l'accès dès que la limite quotidienne est dépassée. L'accès est rétabli
+automatiquement à minuit. Une coupure manuelle, elle, dure jusqu'à ce que vous la leviez.
+
+La coupure utilise le contrôle d'accès de la Livebox (le même que l'application Orange) :
+elle bloque **l'accès Internet** de l'appareil, en Wi‑Fi comme en câble ; le réseau local reste
+accessible. Un appareil qui change d'adresse MAC (téléphone avec « adresse Wi‑Fi privée »)
+peut y échapper ; les consoles et les PC ne changent pas d'adresse.
+
 ## Réglages (variables d'environnement)
 
 | Variable | Défaut | Rôle |

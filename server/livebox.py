@@ -116,7 +116,12 @@ class Livebox:
 
     def call(self, service: str, method: str, params: dict | None = None, _retry: bool = True):
         with self._lock:
-            return self._call(service, method, params, _retry)
+            return self._call(service, method, params, _retry).get("status")
+
+    def call_full(self, service: str, method: str, params: dict | None = None):
+        """Comme call(), mais renvoie la réponse complète (status + data)."""
+        with self._lock:
+            return self._call(service, method, params, True)
 
     def _call(self, service: str, method: str, params: dict | None, _retry: bool):
         if not self._context:
@@ -132,7 +137,7 @@ class Livebox:
                 self._context = None
                 return self._call(service, method, params, False)
             raise LiveboxError(f"Livebox : {result['errors']}")
-        return result.get("status")
+        return result
 
     # --- fonctions utiles -----------------------------------------------------------
     def active_devices(self) -> dict[str, dict]:
@@ -169,6 +174,34 @@ class Livebox:
                     mac = (a.get("MACAddress") or key).lower()
                     out[mac] = (int(a.get("TxBytes") or 0), int(a.get("RxBytes") or 0))
         return out
+
+    # --- contrôle d'accès Internet (règle « ToD » du planificateur de la box) -----------
+    # Mêmes appels que l'interrupteur « accès Internet » de l'intégration Home Assistant.
+    # La coupure porte sur l'accès Internet (WAN) : le réseau local reste accessible.
+    def _schedule(self, mac: str) -> dict:
+        try:
+            res = self.call_full("Scheduler", "getSchedule", {"type": "ToD", "ID": mac.upper()})
+        except LiveboxError:
+            return {}  # pas encore de règle pour cet appareil
+        info = (res.get("data") or {}).get("scheduleInfo") if isinstance(res, dict) else None
+        return info if isinstance(info, dict) else {}
+
+    def is_blocked(self, mac: str) -> bool:
+        return self._schedule(mac).get("override") == "Disable"
+
+    def set_blocked(self, mac: str, blocked: bool) -> None:
+        key = mac.upper()
+        if self._schedule(key):
+            res = self.call_full("Scheduler", "overrideSchedule",
+                                 {"type": "ToD", "ID": key, "override": "Disable" if blocked else "Enable"})
+        elif blocked:
+            res = self.call_full("Scheduler", "addSchedule", {"type": "ToD", "ID": key, "info": {
+                "base": "Weekly", "def": "Enable", "ID": key, "schedule": [],
+                "enable": True, "override": "Disable"}})
+        else:
+            return  # aucune règle : l'appareil n'est pas bloqué
+        if not res.get("status"):
+            raise LiveboxError(f"la box a refusé la modification d'accès ({res})")
 
     # --- statistiques HomeLan (relevés de 30 s, compteurs en bits par fenêtre) ----------
     def _last_readings(self, status) -> dict[str, dict]:

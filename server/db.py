@@ -16,6 +16,10 @@ CREATE TABLE IF NOT EXISTS devices (
     link        TEXT,                             -- wifi / filaire (si connu, via la Livebox)
     iface       TEXT,                             -- interface de la box (ETH0, vap5g0priv0…)
     via         TEXT,                             -- saisi : switch / répéteur / appareil parent
+    auto_block  INTEGER NOT NULL DEFAULT 0,       -- couper Internet à la limite quotidienne
+    blocked     INTEGER NOT NULL DEFAULT 0,       -- accès Internet coupé (par Scan Gaming)
+    blocked_by  TEXT,                             -- 'manuel' ou 'limite'
+    blocked_at  REAL,
     tracked     INTEGER NOT NULL DEFAULT 0,       -- affiché dans le suivi des temps
     daily_limit INTEGER,                          -- minutes par jour, optionnel
     first_seen  REAL NOT NULL,
@@ -47,7 +51,7 @@ CREATE TABLE IF NOT EXISTS traffic (
 );
 """
 
-EDITABLE = {"name", "kind", "tracked", "daily_limit", "via"}
+EDITABLE = {"name", "kind", "tracked", "daily_limit", "via", "auto_block"}
 KINDS = {"console", "pc", "telephone", "tablette", "tv", "autre"}
 
 
@@ -60,9 +64,12 @@ class Store:
         self._db.execute("PRAGMA journal_mode = WAL")
         self._db.executescript(SCHEMA)
         cols = {r["name"] for r in self._db.execute("PRAGMA table_info(devices)")}
-        for col in ("link", "iface", "via"):  # migration des bases plus anciennes
+        for col, decl in (("link", "TEXT"), ("iface", "TEXT"), ("via", "TEXT"),  # migrations
+                          ("auto_block", "INTEGER NOT NULL DEFAULT 0"),
+                          ("blocked", "INTEGER NOT NULL DEFAULT 0"),
+                          ("blocked_by", "TEXT"), ("blocked_at", "REAL")):
             if col not in cols:
-                self._db.execute(f"ALTER TABLE devices ADD COLUMN {col} TEXT")
+                self._db.execute(f"ALTER TABLE devices ADD COLUMN {col} {decl}")
 
     # --- enregistrement d'un scan -------------------------------------------------
     def record_scan(self, seen: dict[str, dict], now: float, grace: float) -> None:
@@ -157,8 +164,9 @@ class Store:
         fields = {k: v for k, v in fields.items() if k in EDITABLE}
         if "kind" in fields and fields["kind"] not in KINDS:
             raise ValueError("type d'appareil inconnu")
-        if "tracked" in fields:
-            fields["tracked"] = 1 if fields["tracked"] else 0
+        for key in ("tracked", "auto_block"):
+            if key in fields:
+                fields[key] = 1 if fields[key] else 0
         if "daily_limit" in fields:
             v = fields["daily_limit"]
             fields["daily_limit"] = int(v) if v not in (None, "", 0) else None
@@ -171,6 +179,11 @@ class Store:
                 self._db.execute(f"UPDATE devices SET {cols} WHERE mac = ?", [*fields.values(), mac])
             row = self._db.execute("SELECT * FROM devices WHERE mac = ?", (mac,)).fetchone()
         return dict(row) if row else None
+
+    def set_blocked(self, mac: str, blocked: bool, by: str | None) -> None:
+        with self._lock, self._db:
+            self._db.execute("UPDATE devices SET blocked = ?, blocked_by = ?, blocked_at = ? WHERE mac = ?",
+                             (1 if blocked else 0, by if blocked else None, time.time() if blocked else None, mac))
 
     def delete_device(self, mac: str) -> None:
         with self._lock, self._db:

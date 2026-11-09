@@ -182,6 +182,35 @@ def homelan_loop(store: Store, box: Livebox) -> None:
         time.sleep(READING_SECONDS)
 
 
+def enforce_limits(store: Store, box: Livebox) -> None:
+    """Coupe Internet aux appareils « coupure automatique » qui ont atteint leur limite,
+    et le rétablit le lendemain pour ceux coupés par la limite (pas les coupures manuelles)."""
+    today = date.today()
+    start_today, _ = day_bounds(today)
+    usage = {d["mac"]: d for d in day_usage(store, today)["devices"]}
+    for dev in store.devices():
+        mac = dev["mac"]
+        if dev["blocked"] and dev["blocked_by"] == "limite" and (dev["blocked_at"] or 0) < start_today:
+            try:
+                box.set_blocked(mac, False)
+                store.set_blocked(mac, False, None)
+                log.info("nouveau jour : accès Internet rétabli pour %s", dev["name"] or mac)
+            except LiveboxError as exc:
+                log.warning("rétablissement impossible pour %s : %s", mac, exc)
+            continue
+        if dev["blocked"] or not (dev["auto_block"] and dev["tracked"] and dev["daily_limit"]):
+            continue
+        u = usage.get(mac) or {}
+        used = u.get("active_seconds") if u.get("active_seconds") is not None else u.get("seconds", 0)
+        if used >= dev["daily_limit"] * 60:
+            try:
+                box.set_blocked(mac, True)
+                store.set_blocked(mac, True, "limite")
+                log.info("limite atteinte : accès Internet coupé pour %s", dev["name"] or mac)
+            except LiveboxError as exc:
+                log.warning("coupure impossible pour %s : %s", mac, exc)
+
+
 def scan_loop(store: Store, box: Livebox | None) -> None:
     detector = Detector(store, box)
     last_purge = 0.0
@@ -193,6 +222,8 @@ def scan_loop(store: Store, box: Livebox | None) -> None:
             store.record_scan(seen, time.time(), GRACE)
             state["last_scan"], state["last_error"] = time.time(), warning
             log.info("scan (%s) : %d appareil(s) en ligne", state["source"], len(seen))
+            if box:
+                enforce_limits(store, box)
             if time.time() - last_purge > 86400:
                 store.purge_older_than(RETENTION)
                 store.purge_traffic_older_than(TRAFFIC_RETENTION)
@@ -283,6 +314,7 @@ def week_usage(store: Store, last: date, days: int = 7) -> dict:
 
 class Handler(BaseHTTPRequestHandler):
     store: Store
+    box: Livebox | None = None
     server_version = "ScanGaming/1.0"
 
     def log_message(self, fmt, *args):  # journal HTTP discret
@@ -337,13 +369,20 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if url.path == "/api/status":
                 return self._json({**state, "interval": INTERVAL, "grace": GRACE,
-                                   "live": bool(live or live_homelan), "active_kbps": ACTIVE_BPS / 1000})
+                                   "live": bool(live or live_homelan), "active_kbps": ACTIVE_BPS / 1000,
+                                   "can_block": self.box is not None})
             if url.path == "/api/devices":
                 return self._json(with_live(self.store.devices()))
             if url.path == "/api/usage":
                 return self._json(day_usage(self.store, parse_day(q.get("day"))))
             if url.path == "/api/device":
-                detail = device_detail(self.store, (q.get("mac") or "").lower(), parse_day(q.get("day")))
+                mac = (q.get("mac") or "").lower()
+                if self.box:  # resynchronise avec la box (coupure faite depuis l'appli Orange…)
+                    real = self.box.is_blocked(mac)
+                    dev = next((x for x in self.store.devices() if x["mac"] == mac), None)
+                    if dev and bool(dev["blocked"]) != real:
+                        self.store.set_blocked(mac, real, "manuel" if real else None)
+                detail = device_detail(self.store, mac, parse_day(q.get("day")))
                 return self._json(detail) if detail else self._json({"error": "appareil inconnu"}, 404)
             if url.path == "/api/week":
                 return self._json(week_usage(self.store, parse_day(q.get("day"))))
@@ -357,9 +396,22 @@ class Handler(BaseHTTPRequestHandler):
     def _do_POST(self):
         if not self._guard():
             return
-        if urlparse(self.path).path == "/api/scan":
+        path = urlparse(self.path).path
+        if path == "/api/scan":
             scan_now.set()
             return self._json({"ok": True})
+        if path.startswith("/api/devices/") and path.endswith("/block"):
+            if not self.box:
+                return self._json({"error": "la coupure nécessite la Livebox (LIVEBOX_PASSWORD)"}, 400)
+            mac = unquote(path.split("/")[3]).lower()
+            blocked = bool(self._body().get("blocked"))
+            try:
+                self.box.set_blocked(mac, blocked)
+            except LiveboxError as exc:
+                return self._json({"error": str(exc)}, 502)
+            self.store.set_blocked(mac, blocked, "manuel")
+            log.info("accès Internet %s manuellement pour %s", "coupé" if blocked else "rétabli", mac)
+            return self._json({"ok": True, "blocked": blocked})
         self._json({"error": "introuvable"}, 404)
 
     def do_PATCH(self):
@@ -420,6 +472,7 @@ def main() -> None:
     Handler.store = store
     box = Livebox(LIVEBOX_PASSWORD, os.environ.get("LIVEBOX_HOST", "192.168.1.1"),
                   os.environ.get("LIVEBOX_USER", "admin")) if LIVEBOX_PASSWORD else None
+    Handler.box = box
     threading.Thread(target=scan_loop, args=(store, box), daemon=True).start()
     if box:
         threading.Thread(target=traffic_loop, args=(store, box), daemon=True).start()
