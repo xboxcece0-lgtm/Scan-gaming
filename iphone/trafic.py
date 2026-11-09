@@ -8,6 +8,7 @@ L'iPhone doit être connecté au Wi‑Fi de la maison. Ctrl‑C (ou fermer a-She
 pour arrêter.
     python3 trafic.py --liste   liste complète des appareils (nom, IP, MAC)
     python3 trafic.py --debug   réponses brutes de la box, pour diagnostic
+    python3 trafic.py --mesures quels appareils la box mesure, avec IPv4/IPv6
 """
 import json
 import os
@@ -199,6 +200,49 @@ def diagnose(box):
     print(f"\n=> Résultat enregistré dans {path}")
 
 
+def diag_mesures(box):
+    """Pour chaque appareil connecté : adresses IPv4/IPv6 et mesures HomeLan de la box."""
+    st = box.call("Devices", "get", {"expression": {
+        "wifi": '.Active==true && wifi && (edev || hnid || wifi_bridge) and .PhysAddress!=""',
+        "eth": '.Active==true && eth && (edev || hnid) and .PhysAddress!=""'}}) or {}
+    def as_dict(service, method, params=None):
+        try:
+            res = box.call(service, method, params)
+        except BoxError as e:
+            print(f"({service}.{method} : {e})")
+            return {}
+        return res if isinstance(res, dict) else {}
+
+    stored = {k.upper(): v.get("NumberOfStoredMeasures")
+              for k, v in as_dict("HomeLan.Device", "get").items() if isinstance(v, dict)}
+    readings = {}
+    for k, v in as_dict("HomeLan", "getDeviceResults", {"NumberOfReadings": 1}).items():
+        t = (v or {}).get("Traffic") or [] if isinstance(v, dict) else []
+        if t:
+            readings[k.upper()] = t[-1]
+    ref = max((r.get("Timestamp") or 0 for r in readings.values()), default=0)
+    lines = [f"{'appareil':<20} lien IPv6 mesures dernier relevé"]
+    for link, devs in st.items() if isinstance(st, dict) else []:
+        for d in devs or []:
+            mac = (d.get("PhysAddress") or "").upper()
+            v6 = [a.get("Address") for a in d.get("IPv6Address") or [] if isinstance(a, dict)]
+            r = readings.get(mac)
+            last = "aucun"
+            if r:
+                age = ref - (r.get("Timestamp") or 0)
+                kbps = ((r.get("Tx_Counter") or 0) + (r.get("Rx_Counter") or 0)) / 30 / 1000
+                last = f"il y a {age // 60} min, {kbps:.0f} kbit/s"
+            name = clean_name(d.get("Name"), d.get("IPAddress") or "", mac)
+            lines.append(f"{name[:20]:<20} {'wifi' if link == 'wifi' else 'fil ':4} "
+                         f"{len(v6):>4} {str(stored.get(mac, '-')):>8} {last}")
+            lines.append(f"    {d.get('IPAddress') or '-'}  {mac}")
+    print("\n".join(lines))
+    path = os.path.expanduser("~/diagnostic-mesures.txt")
+    with open(path, "w") as f:
+        f.write("\n".join(lines) + "\n")
+    print(f"\n=> Résultat enregistré dans {path}")
+
+
 def get_password():
     if os.environ.get("LIVEBOX_PASSWORD"):
         return os.environ["LIVEBOX_PASSWORD"]
@@ -230,6 +274,11 @@ def main():
         for mac, d in sorted(devs.items(), key=lambda x: tuple(int(p) for p in x[1]["ip"].split(".") if p.isdigit())):
             icon = "📶" if d["link"] == "wifi" else "🔌"
             print(f"{icon}{d['name'][:26]}\n   {d['ip']}  {mac}\n   {d['type']}")
+        box.logout()
+        return
+
+    if "--mesures" in sys.argv:
+        diag_mesures(box)
         box.logout()
         return
 
