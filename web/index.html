@@ -8,15 +8,17 @@
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="Scan Gaming">
-  <meta name="theme-color" content="#0f172a">
+  <meta name="theme-color" content="#0b0820">
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="apple-touch-icon" href="icon-180.png">
   <link rel="icon" href="icon-512.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Orbitron:wght@600;800&family=Outfit:wght@400;600;700&display=swap">
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
   <header>
-    <h1>Scan Gaming</h1>
+    <h1><span class="logo">🎮</span><span class="title">SCAN<b>GAMING</b></span></h1>
     <button id="refresh" class="icon-btn" aria-label="Scanner maintenant" title="Scanner maintenant">⟳</button>
   </header>
 
@@ -35,9 +37,9 @@
   <p id="status" class="status"></p>
 
   <nav class="tabs">
-    <button data-view="today" class="active"><span>⏱</span>Temps</button>
-    <button data-view="week"><span>📊</span>Semaine</button>
-    <button data-view="devices"><span>📡</span>Appareils</button>
+    <button data-view="today" class="active"><span>🕹️</span>Partie</button>
+    <button data-view="week"><span>🏆</span>Semaine</button>
+    <button data-view="devices"><span>🛰️</span>Réseau</button>
   </nav>
 
   <dialog id="detail" aria-label="Détail de l’appareil"><div id="detail-body"></div></dialog>

@@ -4,8 +4,8 @@
   "description": "Temps de connexion des consoles et PC de la maison",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#0f172a",
-  "theme_color": "#0f172a",
+  "background_color": "#0b0820",
+  "theme_color": "#0b0820",
   "lang": "fr",
   "icons": [
     {"src": "icon-180.png", "sizes": "180x180", "type": "image/png"},

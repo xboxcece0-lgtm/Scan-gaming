@@ -53,6 +53,16 @@ function statusLine(d) {
   return `<span class="dot on"></span> En ligne`;
 }
 
+function openMore(k) {
+  try { return localStorage.getItem("more-" + k) === "1" ? "open" : ""; } catch { return ""; }
+}
+document.addEventListener("toggle", (e) => {
+  const det = e.target;
+  if (det.classList && det.classList.contains("live-more")) {
+    try { localStorage.setItem("more-" + det.dataset.k, det.open ? "1" : "0"); } catch {}
+  }
+}, true);
+
 function renderLive(devices) {
   // Tous les appareils en ligne : actifs (barre), puis au repos, puis non mesurés
   if (!devices.some((d) => d.rate_down != null)) return "";
@@ -68,11 +78,13 @@ function renderLive(devices) {
       <span class="live-rate">${right}</span>
       ${bar ? `<div class="live-bar"><div style="width:${(rate(d) / max) * 100}%"></div></div>` : ""}
     </div>`;
-  return `<div class="group-title">⚡ En direct · ${online.length} en ligne</div><div class="card live-card">
+  return `<div class="group-title">⚡ En direct <span class="live-badge">LIVE</span> · ${online.length} en ligne</div><div class="card live-card">
     ${active.length ? active.map((d) => row(d, "", fmtRate(rate(d)), true)).join("")
       : `<div class="muted">Aucun appareil n’utilise Internet en ce moment.</div>`}
-    ${idle.length ? `<div class="live-sep">💤 Au repos (${idle.length})</div>` + idle.map((d) => row(d, "idle", rate(d) ? fmtRate(rate(d)) : "0")).join("") : ""}
-    ${unmeasured.length ? `<div class="live-sep">❔ Non mesurés (${unmeasured.length})</div>` + unmeasured.map((d) => row(d, "idle", "—")).join("") : ""}
+    ${idle.length ? `<details class="live-more" data-k="idle" ${openMore("idle")}><summary class="live-sep">💤 Au repos (${idle.length})</summary>`
+      + idle.map((d) => row(d, "idle", rate(d) ? fmtRate(rate(d)) : "💤")).join("") + `</details>` : ""}
+    ${unmeasured.length ? `<details class="live-more" data-k="unmeasured" ${openMore("unmeasured")}><summary class="live-sep">❔ Non mesurés (${unmeasured.length})</summary>`
+      + unmeasured.map((d) => row(d, "idle", "—")).join("") + `</details>` : ""}
     </div>
     <p class="live-note">Débit relevé par la Livebox : toutes les 10 s pour le Wi‑Fi direct, 30 s pour le câble (switch compris). « Non mesurés » : appareils derrière un répéteur (trafic attribué au répéteur) ou que la box ne mesure pas encore.</p>`;
 }
@@ -84,14 +96,18 @@ function renderToday(usage) {
   const tracked = usage.devices.filter((d) => d.tracked);
   if (!tracked.length) {
     el.innerHTML = live + `<div class="empty">Aucun appareil suivi pour l’instant.<br><br>
-      Ouvrez l’onglet <b>Appareils</b>, touchez une console ou un PC et cochez
+      Ouvrez l’onglet <b>🛰️ Réseau</b>, touchez une console ou un PC et cochez
       « Suivre le temps de connexion ».</div>`;
     return;
   }
   const span = usage.end - usage.start;
-  el.innerHTML = live + (live ? `<div class="group-title">Temps du jour</div>` : "") + tracked.map((d) => {
+  const mainOf = (d) => measured(d) ? (d.active_seconds || 0) : d.seconds;
+  tracked.sort((a, b) => mainOf(b) - mainOf(a));
+  const medals = ["🥇", "🥈", "🥉"];
+  el.innerHTML = `<div class="group-title">🏆 Tableau des scores</div>` + tracked.map((d, rank) => {
     const m = measured(d);
-    const main = m ? (d.active_seconds || 0) : d.seconds;  // temps qui compte pour la limite
+    const main = mainOf(d);  // temps qui compte pour la limite
+    const medal = main > 0 && rank < 3 ? `<span class="medal">${medals[rank]}</span>` : "";
     const lim = d.daily_limit ? d.daily_limit * 60 : 0;
     const ratio = lim ? main / lim : 0;
     const cls = ratio >= 1 ? "over" : ratio >= 0.8 ? "warn" : "";
@@ -99,11 +115,11 @@ function renderToday(usage) {
       `<i style="left:${((s.start - usage.start) / span) * 100}%;width:${((s.end - s.start) / span) * 100}%"></i>`).join("");
     const list = d.sessions.slice(-4).map((s) =>
       `${fmtTime(s.start)}–${s.open ? "maintenant" : fmtTime(s.end)}`).join(" · ");
-    return `<div class="card tap" data-mac="${esc(d.mac)}">
+    return `<div class="card tap player ${d.blocked || ratio >= 1 ? "game-over" : d.active_now ? "playing" : ""}" data-mac="${esc(d.mac)}">
       <div class="dev-head">
         <span class="dev-icon">${ICONS[d.kind] || "❔"}</span>
         <div style="flex:1;min-width:0">
-          <div class="dev-name">${esc(displayName(d))}</div>
+          <div class="dev-name">${medal}${esc(displayName(d))}</div>
           <div class="dev-sub">${d.blocked ? `<b class="blocked-txt">⛔ Internet coupé</b>` : isToday ? statusLine(d) : ""}</div>
         </div>
         <div class="dev-times">
@@ -111,15 +127,15 @@ function renderToday(usage) {
           <span class="dev-time-label">${m ? `utilisé · connecté ${fmtDur(d.seconds)}` : "connecté"}</span>
         </div>
       </div>
-      ${lim ? `<div class="bar ${cls}"><div style="width:${Math.min(100, ratio * 100)}%"></div></div>
+      ${lim ? `<div class="hp ${cls}" title="Temps restant"><div style="width:${Math.max(0, 100 - ratio * 100)}%"></div></div>
         <div class="limit ${ratio >= 1 ? "over" : ""}">${ratio >= 1
-          ? `Limite dépassée de ${fmtDur(main - lim)}`
-          : `Reste ${fmtDur(lim - main)} sur ${fmtDur(lim)}`}</div>` : ""}
+          ? `💀 GAME OVER · limite dépassée de ${fmtDur(main - lim)}`
+          : `❤️ Reste ${fmtDur(lim - main)} sur ${fmtDur(lim)}`}</div>` : ""}
       <div class="timeline">${segs}</div>
       <div class="ticks"><span>0 h</span><span>6 h</span><span>12 h</span><span>18 h</span><span>24 h</span></div>
       ${list ? `<div class="sessions">Connexions : ${d.sessions.length > 4 ? "… " : ""}${list}</div>` : ""}
     </div>`;
-  }).join("");
+  }).join("") + live;
 }
 
 // --- Vue « Semaine » --------------------------------------------------------------
