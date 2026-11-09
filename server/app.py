@@ -54,7 +54,7 @@ ACTIVE_BPS = float(os.environ.get("ACTIVE_KBPS", 300)) * 1000
 log = logging.getLogger("scan-gaming")
 state = {"last_scan": None, "last_error": None, "network": None, "source": None, "scanning": False}
 live: dict[str, dict] = {}        # {mac: {"down": bit/s, "up": bit/s}} — clients Wi‑Fi (compteurs AP)
-live_wired: dict[str, dict] = {}  # idem, appareils filaires (relevés HomeLan de 30 s)
+live_homelan: dict[str, dict] = {}  # idem, autres appareils (relevés HomeLan de 30 s)
 scan_now = threading.Event()
 
 
@@ -120,46 +120,54 @@ def traffic_loop(store: Store, box: Livebox) -> None:
         time.sleep(LIVE_INTERVAL)
 
 
-def wired_loop(store: Store, box: Livebox) -> None:
-    """Débit des appareils filaires : relevé HomeLan par appareil, sinon compteur du port
-    quand l'appareil est seul sur ce port (derrière un switch, le trafic est mélangé)."""
+def homelan_loop(store: Store, box: Livebox) -> None:
+    """Débit via les relevés HomeLan de la box (fenêtres de 30 s, par adresse MAC).
+
+    Couvre les appareils filaires — y compris derrière un switch — et ceux connectés
+    via un répéteur. Les clients Wi‑Fi directs gardent la mesure plus réactive des
+    compteurs Wi‑Fi (traffic_loop). Repli : compteur du port Ethernet si l'appareil
+    est seul sur ce port.
+    """
     seen_ts: dict[str, int] = {}
-    use_devices, tick = True, 0
     while True:
-        tick += 1
-        if tick % 20 == 0:  # retente régulièrement le relevé par appareil (≈ 10 min)
-            use_devices = True
         rates, active = {}, []
         try:
-            wired = {m: d for m, d in box.active_devices().items() if d["link"] == "filaire"}
-            dev = {}
-            if use_devices:
-                try:
-                    dev = box.device_readings()
-                except LiveboxError:
-                    dev = {}
-                use_devices = bool(dev)  # inutile de redemander si la box ne répond rien
-            ports = box.port_readings() if any(m not in dev for m in wired) else {}
+            devs = box.active_devices()
+            try:
+                dev = box.device_readings()
+            except LiveboxError:
+                dev = {}
+            # Un appareil inactif garde son dernier relevé (parfois vieux de plusieurs
+            # jours) : on compare à l'horloge de la box, donnée par le relevé le plus récent.
+            ref = max((r.get("Timestamp") or 0 for r in dev.values()), default=0)
+            wired = {m: d for m, d in devs.items() if d["link"] == "filaire"}
             per_port: dict[str, int] = {}
             for d in wired.values():
                 per_port[d["port"]] = per_port.get(d["port"], 0) + 1
-            for mac, d in wired.items():
-                r = dev.get(mac) or (ports.get(d["port"]) if per_port.get(d["port"]) == 1 else None)
-                if not r:
+            need_ports = any(m not in dev and per_port.get(d["port"]) == 1 for m, d in wired.items())
+            ports = box.port_readings() if need_ports else {}
+            for mac, d in devs.items():
+                if mac in live:  # client Wi‑Fi direct : déjà mesuré toutes les 10 s
                     continue
-                down = (r.get("Tx_Counter") or 0) / READING_SECONDS
-                up = (r.get("Rx_Counter") or 0) / READING_SECONDS
+                r = dev.get(mac)
+                if r is None and mac in wired and per_port.get(d["port"]) == 1:
+                    r = ports.get(d["port"])
+                if r is None:
+                    continue
+                ts = r.get("Timestamp") or 0
+                fresh = not ref or ref - ts <= 3 * READING_SECONDS
+                down = (r.get("Tx_Counter") or 0) / READING_SECONDS if fresh else 0.0
+                up = (r.get("Rx_Counter") or 0) / READING_SECONDS if fresh else 0.0
                 rates[mac] = {"down": down, "up": up}
-                ts = r.get("Timestamp")
-                if down + up >= ACTIVE_BPS and ts != seen_ts.get(mac):
+                if fresh and down + up >= ACTIVE_BPS and ts != seen_ts.get(mac):
                     active.append(mac)
                 seen_ts[mac] = ts
             if active:
                 store.add_activity(active, date.today().isoformat(), READING_SECONDS)
         except Exception:
-            log.debug("relevé filaire impossible", exc_info=True)
-        live_wired.clear()
-        live_wired.update(rates)
+            log.debug("relevé HomeLan impossible", exc_info=True)
+        live_homelan.clear()
+        live_homelan.update(rates)
         time.sleep(READING_SECONDS)
 
 
@@ -189,7 +197,7 @@ def scan_loop(store: Store, box: Livebox | None) -> None:
 def with_live(devices: list[dict]) -> list[dict]:
     """Ajoute le débit instantané et l'état « actif » aux appareils mesurés."""
     for dev in devices:
-        r = (live.get(dev["mac"]) or live_wired.get(dev["mac"])) if dev["online"] else None
+        r = (live.get(dev["mac"]) or live_homelan.get(dev["mac"])) if dev["online"] else None
         dev["rate_down"] = round(r["down"]) if r else None
         dev["rate_up"] = round(r["up"]) if r else None
         dev["active_now"] = bool(r and r["down"] + r["up"] >= ACTIVE_BPS)
@@ -291,7 +299,7 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if url.path == "/api/status":
                 return self._json({**state, "interval": INTERVAL, "grace": GRACE,
-                                   "live": bool(live or live_wired), "active_kbps": ACTIVE_BPS / 1000})
+                                   "live": bool(live or live_homelan), "active_kbps": ACTIVE_BPS / 1000})
             if url.path == "/api/devices":
                 return self._json(with_live(self.store.devices()))
             if url.path == "/api/usage":
@@ -353,7 +361,7 @@ def main() -> None:
     threading.Thread(target=scan_loop, args=(store, box), daemon=True).start()
     if box:
         threading.Thread(target=traffic_loop, args=(store, box), daemon=True).start()
-        threading.Thread(target=wired_loop, args=(store, box), daemon=True).start()
+        threading.Thread(target=homelan_loop, args=(store, box), daemon=True).start()
     log.info("détection via %s — interface sur http://0.0.0.0:%d",
              "la Livebox" if LIVEBOX_PASSWORD else "scan réseau", PORT)
     ThreadingHTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
