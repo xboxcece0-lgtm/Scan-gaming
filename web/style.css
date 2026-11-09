@@ -1,11 +1,11 @@
 :root {
   --bg: #f4f5f8; --card: #ffffff; --text: #111827; --muted: #6b7280; --line: #e5e7eb;
-  --accent: #4f46e5; --ok: #16a34a; --warn: #d97706; --bad: #dc2626; --track: #e0e7ff;
+  --accent: #4f46e5; --series-down: #4f46e5; --series-up: #0d9488; --ok: #16a34a; --warn: #d97706; --bad: #dc2626; --track: #e0e7ff;
   color-scheme: light dark;
 }
 @media (prefers-color-scheme: dark) {
   :root { --bg: #0f172a; --card: #1e293b; --text: #f1f5f9; --muted: #94a3b8; --line: #334155;
-          --accent: #818cf8; --track: #312e81; }
+          --accent: #818cf8; --track: #312e81; --series-down: #6366f1; --series-up: #0d9488; }
 }
 * { box-sizing: border-box; }
 html, body { margin: 0; background: var(--bg); color: var(--text);
@@ -131,3 +131,35 @@ dialog input[type=checkbox] { width: 22px; height: 22px; accent-color: var(--acc
 .node.branch { font-weight: 600; }
 .node.group { border: 1px dashed var(--muted); background: transparent; }
 .node .live-txt { font-size: 12px; }
+
+/* --- Fiche appareil --- */
+#detail { width: min(96vw, 640px); max-height: 92vh; overflow-y: auto; }
+.day-nav.small { padding: 8px 0; gap: 8px; }
+.day-nav.small span { min-width: 150px; text-align: center; font-weight: 600; }
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(96px, 1fr)); gap: 8px; margin-bottom: 14px; }
+.tile { background: var(--bg); border-radius: 10px; padding: 8px 10px; display: flex; flex-direction: column; }
+.tile b { font-size: 16px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.tile span { font-size: 12px; color: var(--muted); }
+.chart-head { display: flex; justify-content: space-between; align-items: baseline; flex-wrap: wrap; gap: 4px; }
+.chart-title { font-size: 13px; color: var(--muted); font-weight: 600; }
+.chart-head .legend { margin: 0; }
+.sw.down { background: var(--series-down); } .sw.up { background: var(--series-up); }
+.chart-wrap { position: relative; margin-top: 4px; }
+.chart { width: 100%; height: auto; display: block; touch-action: pan-y; }
+.chart .grid { stroke: var(--line); stroke-width: 1; }
+.chart .axis { fill: var(--muted); font-size: 11px; }
+.chart .area-down { fill: var(--series-down); opacity: .22; }
+.chart .line-down { fill: none; stroke: var(--series-down); stroke-width: 2; stroke-linejoin: round; }
+.chart .line-up { fill: none; stroke: var(--series-up); stroke-width: 2; stroke-linejoin: round; }
+.chart .cross { stroke: var(--muted); stroke-width: 1; stroke-dasharray: 3 3; }
+.tip { position: absolute; top: 0; transform: translateX(-50%); background: var(--card); border: 1px solid var(--line);
+  border-radius: 8px; padding: 6px 8px; font-size: 12px; line-height: 1.5; pointer-events: none; white-space: nowrap;
+  box-shadow: 0 4px 14px rgba(0,0,0,.25); }
+.tip .sw { width: 8px; height: 8px; display: inline-block; border-radius: 2px; margin-right: 4px; }
+.chart-empty { position: absolute; inset: 0 0 24px 44px; display: flex; align-items: center; justify-content: center;
+  text-align: center; color: var(--muted); font-size: 13px; padding: 0 12px; }
+.data-table { margin-top: 12px; font-size: 13px; }
+.data-table summary { cursor: pointer; color: var(--muted); }
+.data-table table { width: 100%; border-collapse: collapse; margin-top: 6px; font-variant-numeric: tabular-nums; }
+.data-table th, .data-table td { text-align: right; padding: 3px 6px; border-bottom: 1px solid var(--line); }
+.data-table th:first-child, .data-table td:first-child { text-align: left; }

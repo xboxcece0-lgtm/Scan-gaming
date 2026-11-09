@@ -281,12 +281,158 @@ $("#edit").addEventListener("close", async () => {
       await api(`/api/devices/${mac}`, { method: "DELETE" });
     } else return;
     await refresh();
+    if (state.detailMac && action === "save") openDetail(state.detailMac, state.detailDay);
   } catch (e) { showError(e); }
 });
 
 document.addEventListener("click", (e) => {
+  if (e.target.closest("#detail")) return;
   const card = e.target.closest(".card.tap, .tap-row");
-  if (card) openEdit(card.dataset.mac);
+  if (card) openDetail(card.dataset.mac);
+});
+
+
+// --- Fiche d'un appareil : débit sur la journée + statistiques --------------------
+function fmtBytes(b) {
+  if (b >= 1e9) return `${(b / 1e9).toFixed(1).replace(".", ",")} Go`;
+  if (b >= 1e6) return `${Math.round(b / 1e6)} Mo`;
+  if (b >= 1e3) return `${Math.round(b / 1e3)} ko`;
+  return b ? `${b} o` : "0";
+}
+function niceMax(v) {
+  const steps = [1, 2, 5, 10, 20, 50, 100, 200, 500, 1000];
+  const mbps = v / 1e6;
+  return (steps.find((s) => s >= mbps) || Math.ceil(mbps / 1000) * 1000) * 1e6;
+}
+
+function openDetail(mac, day) {
+  state.detailMac = mac;
+  state.detailDay = day || (state.view === "today" ? state.day : todayISO());
+  $("#detail-body").innerHTML = `<p class="muted">Chargement…</p>`;
+  if (!$("#detail").open) $("#detail").showModal();
+  loadDetail();
+}
+
+async function loadDetail() {
+  try {
+    const d = await api(`/api/device?mac=${encodeURIComponent(state.detailMac)}&day=${state.detailDay}`);
+    renderDetail(d);
+  } catch (e) { $("#detail-body").innerHTML = `<p class="status err">Erreur : ${esc(e.message)}</p>`; }
+}
+
+function chartSVG(d) {
+  const W = 600, H = 190, L = 44, R = 8, T = 10, B = 24, pw = W - L - R, ph = H - T - B;
+  const toBps = (bytes) => bytes * 8 / 300;  // octets sur 5 min → bit/s moyen
+  const down = d.bins.map((b) => toBps(b[0])), up = d.bins.map((b) => toBps(b[1]));
+  const max = niceMax(Math.max(1e5, ...down, ...up));
+  const x = (i) => L + (i / 288) * pw, y = (v) => T + ph - (v / max) * ph;
+  // limite le tracé à « maintenant » pour le jour en cours
+  const last = d.day === todayISO() ? Math.min(288, Math.ceil((Date.now() / 1000 - d.start) / 300)) : 288;
+  const pts = (arr) => arr.slice(0, last).map((v, i) => `${x(i + 0.5).toFixed(1)},${y(v).toFixed(1)}`).join(" ");
+  const area = last ? `M${x(0.5)},${y(0)} L${pts(down).replace(/ /g, " L")} L${x(last - 0.5)},${y(0)} Z` : "";
+  const grid = [0, 0.5, 1].map((f) => `<line x1="${L}" x2="${W - R}" y1="${y(max * f)}" y2="${y(max * f)}" class="grid"/>
+      <text x="${L - 6}" y="${y(max * f) + 4}" class="axis" text-anchor="end">${f ? fmtRate(max * f).replace(" Mbit/s", "").replace(" kbit/s", " k") : "0"}</text>`).join("");
+  const ticks = [0, 6, 12, 18, 24].map((h) => `<text x="${L + (h / 24) * pw}" y="${H - 6}" class="axis"
+      text-anchor="${h === 0 ? "start" : h === 24 ? "end" : "middle"}">${h} h</text>`).join("");
+  return `<svg viewBox="0 0 ${W} ${H}" class="chart" role="img"
+      aria-label="Débit de ${esc(displayName(d))} sur la journée, maximum ${fmtRate(max)}">
+    ${grid}${ticks}
+    <text x="${L}" y="${T - 1}" class="axis">Mbit/s</text>
+    ${area ? `<path d="${area}" class="area-down"/>` : ""}
+    <polyline points="${pts(down)}" class="line-down"/>
+    <polyline points="${pts(up)}" class="line-up"/>
+    <line class="cross" x1="0" x2="0" y1="${T}" y2="${T + ph}" visibility="hidden"/>
+    <rect x="${L}" y="${T}" width="${pw}" height="${ph}" fill="transparent" class="hit"/>
+  </svg>`;
+}
+
+function renderDetail(d) {
+  state.detailData = d;
+  const m = measured(d);
+  const span = d.end - d.start;
+  const segs = d.sessions.map((s) =>
+    `<i style="left:${((s.start - d.start) / span) * 100}%;width:${((s.end - s.start) / span) * 100}%"></i>`).join("");
+  const hasTraffic = d.total_down + d.total_up > 0;
+  const hours = Array.from({ length: 24 }, (_, h) => {
+    const sl = d.bins.slice(h * 12, h * 12 + 12);
+    return [h, sl.reduce((a, b) => a + b[0], 0), sl.reduce((a, b) => a + b[1], 0)];
+  });
+  $("#detail-body").innerHTML = `
+    <div class="dev-head">
+      <span class="dev-icon">${ICONS[d.kind] || "❔"}</span>
+      <div style="flex:1;min-width:0">
+        <h2 class="dev-name" style="margin:0">${esc(displayName(d))}</h2>
+        <div class="dev-sub">${d.day === todayISO() ? statusLine(d) : ""} ${d.via ? "· via " + esc(d.via) : ""}</div>
+      </div>
+    </div>
+    <nav class="day-nav small">
+      <button data-dday="-1" aria-label="Jour précédent">‹</button>
+      <span>${dayLabel(d.day)}</span>
+      <button data-dday="1" aria-label="Jour suivant" ${d.day >= todayISO() ? "disabled" : ""}>›</button>
+    </nav>
+    <div class="tiles">
+      <div class="tile"><b>${m ? fmtDur(d.active_seconds || 0) : "—"}</b><span>utilisé</span></div>
+      <div class="tile"><b>${fmtDur(d.seconds)}</b><span>connecté</span></div>
+      <div class="tile"><b>${fmtBytes(d.total_down)}</b><span>↓ reçu</span></div>
+      <div class="tile"><b>${fmtBytes(d.total_up)}</b><span>↑ envoyé</span></div>
+      <div class="tile"><b>${d.peak_bps ? fmtRate(d.peak_bps) : "—"}</b><span>pic${d.peak_at ? " à " + fmtTime(d.peak_at) : ""}</span></div>
+    </div>
+    <div class="chart-head">
+      <span class="chart-title">Débit (moyenne sur 5 min)</span>
+      <span class="legend"><i class="sw down"></i>↓ reçu <i class="sw up"></i>↑ envoyé</span>
+    </div>
+    <div class="chart-wrap">
+      ${chartSVG(d)}
+      <div class="tip" hidden></div>
+      ${hasTraffic ? "" : `<div class="chart-empty">${m || d.rate_down != null ? "Aucun trafic enregistré ce jour-là." : "Débit non mesuré pour cet appareil (répéteur ou pas encore mesuré par la box)."}</div>`}
+    </div>
+    <div class="chart-title" style="margin-top:12px">Connexions</div>
+    <div class="timeline">${segs}</div>
+    <div class="ticks"><span>0 h</span><span>6 h</span><span>12 h</span><span>18 h</span><span>24 h</span></div>
+    <details class="data-table"><summary>Voir les données heure par heure</summary>
+      <table><thead><tr><th>Heure</th><th>↓ reçu</th><th>↑ envoyé</th></tr></thead><tbody>
+      ${hours.filter((h) => h[1] + h[2] > 0).map((h) => `<tr><td>${h[0]} h</td><td>${fmtBytes(h[1])}</td><td>${fmtBytes(h[2])}</td></tr>`).join("")
+        || `<tr><td colspan="3" class="muted">Aucune donnée</td></tr>`}</tbody></table></details>
+    <div class="actions">
+      <button type="button" class="primary" data-act="edit" style="order:2">✏️ Modifier</button>
+      <span style="order:1"></span>
+      <button type="button" data-act="close" style="order:3">Fermer</button>
+    </div>`;
+  bindChart();
+}
+
+function bindChart() {
+  const svg = $("#detail .chart"), tip = $("#detail .tip"), cross = svg.querySelector(".cross"), d = state.detailData;
+  const W = 600, L = 44, R = 8, pw = W - L - R;
+  const hide = () => { tip.hidden = true; cross.setAttribute("visibility", "hidden"); };
+  const move = (ev) => {
+    const box = svg.getBoundingClientRect();
+    const sx = ((ev.clientX - box.left) / box.width) * W;
+    const i = Math.max(0, Math.min(287, Math.floor(((sx - L) / pw) * 288)));
+    const last = d.day === todayISO() ? Math.ceil((Date.now() / 1000 - d.start) / 300) : 288;
+    if (i >= last) return hide();  // pas d'info-bulle sur les heures à venir
+    const cx = L + ((i + 0.5) / 288) * pw;
+    cross.setAttribute("x1", cx); cross.setAttribute("x2", cx); cross.setAttribute("visibility", "visible");
+    const t = d.start + i * 300, [dn, up] = d.bins[i];
+    tip.innerHTML = `<b>${fmtTime(t)}–${fmtTime(t + 300)}</b><br><i class="sw down"></i>↓ ${fmtRate(dn * 8 / 300) || "0"}<br><i class="sw up"></i>↑ ${fmtRate(up * 8 / 300) || "0"}`;
+    tip.hidden = false;
+    const left = (cx / W) * box.width;
+    tip.style.left = `${Math.min(Math.max(left, 60), box.width - 60)}px`;
+  };
+  svg.addEventListener("pointermove", move);
+  svg.addEventListener("pointerdown", move);
+  svg.addEventListener("pointerleave", hide);
+}
+
+$("#detail").addEventListener("click", (e) => {
+  if (e.target === $("#detail")) return $("#detail").close();  // clic sur le fond
+  const nav = e.target.closest("[data-dday]");
+  if (nav) { state.detailDay = shiftDay(state.detailDay, Number(nav.dataset.dday)); loadDetail(); return; }
+  const act = e.target.closest("[data-act]");
+  if (!act) return;
+  $("#detail").close();
+  if (act.dataset.act === "edit") openEdit(state.detailMac);
+  else state.detailMac = null;
 });
 
 // --- Navigation & rafraîchissement --------------------------------------------------
@@ -330,5 +476,9 @@ async function refresh() {
 }
 
 document.addEventListener("visibilitychange", () => { if (!document.hidden) refresh(); });
-setInterval(() => { if (!document.hidden && !$("#edit").open) refresh(); }, 10000);
+setInterval(() => {
+  if (document.hidden || $("#edit").open) return;
+  if ($("#detail").open) { if (state.detailDay === todayISO()) loadDetail(); }
+  else refresh();
+}, 10000);
 refresh();

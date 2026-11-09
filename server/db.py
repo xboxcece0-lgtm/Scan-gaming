@@ -37,6 +37,14 @@ CREATE TABLE IF NOT EXISTS activity (
     seconds REAL NOT NULL DEFAULT 0,
     PRIMARY KEY (mac, day)
 );
+-- Historique de trafic : octets échangés par minute et par appareil
+CREATE TABLE IF NOT EXISTS traffic (
+    mac    TEXT NOT NULL REFERENCES devices(mac) ON DELETE CASCADE,
+    minute INTEGER NOT NULL,          -- horodatage Unix / 60
+    down   REAL NOT NULL DEFAULT 0,   -- octets reçus par l'appareil
+    up     REAL NOT NULL DEFAULT 0,   -- octets envoyés par l'appareil
+    PRIMARY KEY (mac, minute)
+);
 """
 
 EDITABLE = {"name", "kind", "tracked", "daily_limit", "via"}
@@ -108,6 +116,21 @@ class Store:
                 out.setdefault(r["mac"], {})[r["day"]] = r["seconds"]
         return out
 
+    def add_traffic(self, rows: list[tuple[str, int, float, float]]) -> None:
+        """Ajoute des octets (mac, minute, reçus, envoyés) aux compteurs par minute."""
+        with self._lock, self._db:
+            self._db.executemany(
+                """INSERT INTO traffic (mac, minute, down, up) SELECT ?, ?, ?, ?
+                   WHERE EXISTS (SELECT 1 FROM devices WHERE mac = ?)
+                   ON CONFLICT(mac, minute) DO UPDATE SET down = down + excluded.down, up = up + excluded.up""",
+                [(m, minute, d, u, m) for m, minute, d, u in rows])
+
+    def traffic_between(self, mac: str, start: float, end: float) -> list[tuple[int, float, float]]:
+        with self._lock:
+            return [tuple(r) for r in self._db.execute(
+                "SELECT minute, down, up FROM traffic WHERE mac = ? AND minute >= ? AND minute < ? ORDER BY minute",
+                (mac, int(start // 60), int(end // 60)))]
+
     def known_hostnames(self) -> dict[str, str | None]:
         with self._lock:
             return {r["mac"]: r["hostname"] for r in self._db.execute("SELECT mac, hostname FROM devices")}
@@ -158,6 +181,10 @@ class Store:
         with self._lock, self._db:
             self._db.execute("DELETE FROM sessions WHERE open = 0 AND end < ?", (cutoff,))
             self._db.execute("DELETE FROM activity WHERE day < date(?, 'unixepoch', 'localtime')", (cutoff,))
+
+    def purge_traffic_older_than(self, days: int) -> None:
+        with self._lock, self._db:
+            self._db.execute("DELETE FROM traffic WHERE minute < ?", (int((time.time() - days * 86400) // 60),))
 
 
 # --- calculs de durée --------------------------------------------------------------

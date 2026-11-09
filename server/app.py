@@ -9,6 +9,7 @@ Variables d'environnement (toutes optionnelles) :
   DB_PATH        fichier SQLite (défaut data/scan-gaming.db)
   APP_PASSWORD   mot de passe de l'interface (authentification HTTP basique)
   RETENTION_DAYS durée de conservation de l'historique (défaut 400)
+  TRAFFIC_RETENTION_DAYS conservation du débit minute par minute (défaut 62)
   LIVEBOX_PASSWORD mot de passe administrateur de la Livebox : active la
                  détection via la box (recommandé pour les Livebox Orange)
   LIVEBOX_HOST   adresse de la Livebox (défaut 192.168.1.1)
@@ -46,6 +47,7 @@ GRACE = float(os.environ.get("SCAN_GRACE", 180))
 PORT = int(os.environ.get("PORT", 8080))
 PASSWORD = os.environ.get("APP_PASSWORD", "")
 RETENTION = int(os.environ.get("RETENTION_DAYS", 400))
+TRAFFIC_RETENTION = int(os.environ.get("TRAFFIC_RETENTION_DAYS", 62))  # historique minute par minute
 DB_PATH = os.environ.get("DB_PATH", str(ROOT / "data" / "scan-gaming.db"))
 LIVEBOX_PASSWORD = os.environ.get("LIVEBOX_PASSWORD", "")
 LIVE_INTERVAL = float(os.environ.get("LIVE_INTERVAL", 10))
@@ -110,6 +112,9 @@ def traffic_loop(store: Store, box: Livebox) -> None:
                 active = [m for m, r in rates.items() if r["down"] + r["up"] >= ACTIVE_BPS]
                 if active:
                     store.add_activity(active, date.today().isoformat(), dt)
+                minute = int(now // 60)
+                store.add_traffic([(m, minute, r["down"] * dt / 8, r["up"] * dt / 8)
+                                   for m, r in rates.items() if r["down"] + r["up"] > 0])
             live.clear()
             live.update(rates)
             prev, prev_t = counters, now
@@ -131,7 +136,7 @@ def homelan_loop(store: Store, box: Livebox) -> None:
     """
     seen_ts: dict[str, int] = {}
     while True:
-        rates, active = {}, []
+        rates, active, samples = {}, [], []
         try:
             devs = box.active_devices()
             try:
@@ -160,11 +165,16 @@ def homelan_loop(store: Store, box: Livebox) -> None:
                 down = (r.get("Tx_Counter") or 0) / READING_SECONDS if fresh else 0.0
                 up = (r.get("Rx_Counter") or 0) / READING_SECONDS if fresh else 0.0
                 rates[mac] = {"down": down, "up": up}
-                if fresh and down + up >= ACTIVE_BPS and ts != seen_ts.get(mac):
-                    active.append(mac)
+                if fresh and ts != seen_ts.get(mac):
+                    if down + up >= ACTIVE_BPS:
+                        active.append(mac)
+                    if down + up > 0:  # bits sur 30 s → octets, à la minute du relevé
+                        samples.append((mac, int(ts // 60), down * READING_SECONDS / 8, up * READING_SECONDS / 8))
                 seen_ts[mac] = ts
             if active:
                 store.add_activity(active, date.today().isoformat(), READING_SECONDS)
+            if samples:
+                store.add_traffic(samples)
         except Exception:
             log.debug("relevé HomeLan impossible", exc_info=True)
         live_homelan.clear()
@@ -185,6 +195,7 @@ def scan_loop(store: Store, box: Livebox | None) -> None:
             log.info("scan (%s) : %d appareil(s) en ligne", state["source"], len(seen))
             if time.time() - last_purge > 86400:
                 store.purge_older_than(RETENTION)
+                store.purge_traffic_older_than(TRAFFIC_RETENTION)
                 last_purge = time.time()
         except Exception as exc:  # on ne veut jamais arrêter la boucle
             state["last_error"] = str(exc)
@@ -229,6 +240,29 @@ def day_usage(store: Store, d: date) -> dict:
             ],
         })
     return {"day": d.isoformat(), "start": start, "end": end, "devices": devices}
+
+
+def device_detail(store: Store, mac: str, d: date) -> dict | None:
+    """Fiche d'un appareil pour un jour : temps, sessions, débit par tranches de 5 min."""
+    usage = day_usage(store, d)
+    dev = next((x for x in usage["devices"] if x["mac"] == mac), None)
+    if dev is None:
+        return None
+    start, end = usage["start"], usage["end"]
+    bins = [[0.0, 0.0] for _ in range(288)]  # 288 tranches de 5 minutes
+    peak, peak_at = 0.0, None
+    for minute, down, up in store.traffic_between(mac, start, end):
+        i = int((minute * 60 - start) // 300)
+        if 0 <= i < 288:
+            bins[i][0] += down
+            bins[i][1] += up
+        rate = (down + up) * 8 / 60
+        if rate > peak:
+            peak, peak_at = rate, minute * 60
+    return {**dev, "day": usage["day"], "start": start, "end": end,
+            "bins": [[round(a), round(b)] for a, b in bins],
+            "total_down": round(sum(b[0] for b in bins)), "total_up": round(sum(b[1] for b in bins)),
+            "peak_bps": round(peak), "peak_at": peak_at}
 
 
 def week_usage(store: Store, last: date, days: int = 7) -> dict:
@@ -308,6 +342,9 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(with_live(self.store.devices()))
             if url.path == "/api/usage":
                 return self._json(day_usage(self.store, parse_day(q.get("day"))))
+            if url.path == "/api/device":
+                detail = device_detail(self.store, (q.get("mac") or "").lower(), parse_day(q.get("day")))
+                return self._json(detail) if detail else self._json({"error": "appareil inconnu"}, 404)
             if url.path == "/api/week":
                 return self._json(week_usage(self.store, parse_day(q.get("day"))))
         except ValueError as exc:
