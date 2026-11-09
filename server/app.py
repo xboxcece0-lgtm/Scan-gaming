@@ -37,7 +37,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 sys.path.insert(0, str(Path(__file__).parent))
 import scanner  # noqa: E402
-from livebox import READING_SECONDS, Livebox, LiveboxError, clean_name, guess_kind  # noqa: E402
+from livebox import READING_SECONDS, Livebox, LiveboxError, best_name, guess_kind  # noqa: E402
 from db import Store, day_bounds, overlap_seconds  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -239,13 +239,15 @@ def simplify_topology(node: dict, depth: int = 0) -> list[dict]:
             label += " (invité)"
         if "switch" in (low + dtype.lower()):
             return [{"type": "switch", "name": name or "Switch", "children": kids}]
+        if label and label.startswith("🔌") and len(kids) > 1:
+            kids = [{"type": "switch", "name": "Switch", "inferred": True, "children": kids}]
         return [{"type": "iface", "name": label or name, "children": kids}]
     ssw = node.get("SSW") if isinstance(node.get("SSW"), dict) else {}
     low = (name + " " + dtype).lower()
     kind = ("repeater" if ssw.get("CurrentMode") == "Slave" or "repeteur" in low or "répéteur" in low
-            or "extender" in low or "wifi_bridge" in tags
+            or "extender" in low or ("wifi_bridge" in tags and kids)
             else "switch" if "switch" in low else "device")
-    return [{"type": kind, "mac": mac, "name": clean_name(name) or mac, "dtype": dtype,
+    return [{"type": kind, "mac": mac, "name": best_name(node) or node.get("IPAddress") or mac, "dtype": dtype,
              "active": bool(node.get("Active")), "children": kids}]
 
 

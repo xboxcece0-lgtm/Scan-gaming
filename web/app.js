@@ -244,6 +244,9 @@ function renderTopo(tree, devices) {
         : `<li><span class="node branch">${esc(n.name)}</span><ul>${kids}</ul></li>`;
     }
     if (n.mac) seen.add(n.mac);
+    if (n.type === "switch" && !n.mac) {  // switch déduit (plusieurs appareils sur un port)
+      return kids ? `<li><span class="node infra">🔀 ${esc(n.name)}${n.inferred ? ` <span class="muted">(déduit)</span>` : ""}</span><ul>${kids}</ul></li>` : "";
+    }
     const d = byMac.get(n.mac);
     const online = d ? !!d.online : n.active;
     if (!online && !showOff && !kids) return "";

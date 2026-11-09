@@ -49,6 +49,28 @@ def clean_name(name: str | None) -> str | None:
     return name
 
 
+GENERIC_NAME = re.compile(r"(device|[ée]quipement|appareil|pc|unknown|none)([ _#-]*\d+)?", re.I)
+
+
+def best_name(d: dict) -> str | None:
+    """Meilleur nom disponible, comme l'application Orange : nom de l'appareil s'il est
+    parlant, sinon un nom de l'historique (DHCP, mDNS, interface Orange…), sinon la base
+    d'appareils d'Orange (BDD : nom commercial, fabricant + modèle)."""
+    raw = clean_name(d.get("Name"))
+    if raw and not GENERIC_NAME.fullmatch(raw):
+        return raw
+    for n in d.get("Names") or []:
+        cand = clean_name((n or {}).get("Name")) if isinstance(n, dict) else None
+        if cand and not GENERIC_NAME.fullmatch(cand) and (n.get("Source") or "") != "default":
+            return cand
+    bdd = d.get("BDD") if isinstance(d.get("BDD"), dict) else {}
+    for cand in (bdd.get("DeviceName"), " ".join(x for x in (bdd.get("Manufacturer"), bdd.get("ModelName")) if x)):
+        cand = clean_name(cand)
+        if cand:
+            return cand
+    return raw  # « Device-100 » vaut mieux que rien
+
+
 class LiveboxError(Exception):
     pass
 
@@ -167,8 +189,8 @@ class Livebox:
                     kind = None
                 found[mac] = {
                     "ip": d.get("IPAddress") or "",
-                    "name": clean_name(d.get("Name")),
-                    "type": d.get("DeviceType") or None,
+                    "name": best_name(d),
+                    "type": d.get("DeviceType") or (d.get("BDD") or {}).get("DeviceType") or None,
                     "link": kind,
                     "port": iface.upper() if link == "eth" else None,
                     "iface": iface or None,
