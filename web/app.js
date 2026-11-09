@@ -66,7 +66,7 @@ function renderLive(devices) {
       <div class="live-bar"><div style="width:${((d.rate_down + d.rate_up) / max) * 100}%"></div></div>
     </div>`).join("") : `<div class="muted">Aucun appareil n’utilise Internet en ce moment.</div>`}
     ${now.length > 8 ? `<div class="muted">… et ${now.length - 8} autres</div>` : ""}</div>
-    <p class="live-note">Débit mesuré pour les appareils en Wi‑Fi directement sur la box. Câble et répéteur : temps de connexion seulement.</p>`;
+    <p class="live-note">Débit mesuré pour le Wi‑Fi direct sur la box, et pour le câble quand l’appareil est seul sur son port. Derrière un répéteur ou un switch : temps de connexion seulement.</p>`;
 }
 
 function renderToday(usage) {

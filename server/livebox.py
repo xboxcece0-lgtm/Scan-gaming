@@ -18,6 +18,8 @@ import urllib.error
 import urllib.request
 
 CONTENT_TYPE = "application/x-sah-ws-1-call+json"
+MAC_KEY = re.compile(r"[0-9A-Fa-f]{2}(:[0-9A-Fa-f]{2}){5}")
+READING_SECONDS = 30  # durée d'une fenêtre de relevé HomeLan
 
 # Requêtes reprises de l'intégration Home Assistant « livebox » (cyr-ius).
 ACTIVE_DEVICES = {
@@ -148,6 +150,7 @@ class Livebox:
                     "name": clean_name(d.get("Name")),
                     "type": d.get("DeviceType") or None,
                     "link": "wifi" if link == "wifi" else "filaire" if link == "eth" else None,
+                    "port": (d.get("InterfaceName") or "").upper() if link == "eth" else None,
                 }
         return found
 
@@ -165,6 +168,29 @@ class Livebox:
                     mac = (a.get("MACAddress") or key).lower()
                     out[mac] = (int(a.get("TxBytes") or 0), int(a.get("RxBytes") or 0))
         return out
+
+    # --- statistiques HomeLan (relevés de 30 s, compteurs en bits par fenêtre) ----------
+    def _last_readings(self, status) -> dict[str, dict]:
+        out = {}
+        for key, v in (status or {}).items() if isinstance(status, dict) else []:
+            traffic = (v or {}).get("Traffic") or []
+            if traffic and isinstance(traffic[-1], dict):
+                out[key] = traffic[-1]
+        return out
+
+    def device_readings(self) -> dict[str, dict]:
+        """Dernier relevé HomeLan par appareil : {mac: {Timestamp, Rx_Counter, Tx_Counter}}."""
+        status = self.call("HomeLan", "getDeviceResults", {"NumberOfReadings": 1})
+        return {k.lower(): v for k, v in self._last_readings(status).items() if MAC_KEY.fullmatch(k)}
+
+    def port_readings(self) -> dict[str, dict]:
+        """Dernier relevé HomeLan par port, indexé par nom d'interface (ETH0, ETH1…)."""
+        names = {}
+        for item in (self.call("HomeLan.Interface", "get") or {}).values():
+            if isinstance(item, dict) and item.get("Name") and item.get("FriendlyName"):
+                names.setdefault(item["FriendlyName"], item["Name"].upper())
+        readings = self._last_readings(self.call("HomeLan", "getResults", {"NumberOfReadings": 1}))
+        return {names[f]: r for f, r in readings.items() if f in names}
 
     def device_traffic(self, macs: list[str], readings: int = 4):
         """Statistiques de trafic par appareil (HomeLan), si la box les fournit.

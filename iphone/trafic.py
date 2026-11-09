@@ -175,16 +175,23 @@ def diagnose(box):
     lines.append(f"--- {len(devs)} appareils, dont {len(wired)} filaires : " +
                  ", ".join(f"{devs[m]['name']} ({m[-5:]})" for m in wired))
     print(lines[-1])
-    show("HomeLan.getDevicesStatus", lambda: box.call("HomeLan", "getDevicesStatus"))
-    show("HomeLan.getDevicesReadingInterval", lambda: box.call("HomeLan", "getDevicesReadingInterval"))
-    show("HomeLan.getDevicesNames", lambda: box.call("HomeLan", "getDevicesNames"))
     if wired:
+        def ports():
+            st = box.call("Devices", "get", {"expression": {"eth": ".Active==true && eth && edev"}}) or {}
+            return [(d.get("Name"), d.get("InterfaceName"), d.get("Layer2Interface"))
+                    for d in (st.get("eth") or [])]
+        show("Ports des appareils filaires (nom, InterfaceName, Layer2Interface)", ports)
         m = wired[0]
-        for name in (m, m.lower()):
-            show(f"HomeLan.getDeviceResults {name[-5:]}", lambda n=name: box.call(
-                "HomeLan", "getDeviceResults", {"DeviceName": [n], "NumberOfReadings": 2}))
-        show("Devices.get filaire (1 appareil)", lambda: box.call(
-            "Devices", "get", {"expression": {"eth": f'eth && .PhysAddress=="{m}"'}}), 3000)
+        show("HomeLan.getDeviceResults sans filtre", lambda: box.call(
+            "HomeLan", "getDeviceResults", {"NumberOfReadings": 1}), 2500)
+        show(f"HomeLan.getDeviceResults {m[-5:]} sur 10 min", lambda: box.call(
+            "HomeLan", "getDeviceResults", {"DeviceName": [m], "Seconds": 600}))
+        show(f"HomeLan.getDeviceResults {m[-5:]} (texte)", lambda: box.call(
+            "HomeLan", "getDeviceResults", {"DeviceName": m, "NumberOfReadings": 1}))
+    show("HomeLan.Interface.get", lambda: {k: (v.get("FriendlyName"), v.get("NumberOfStoredMeasures"))
+                                           for k, v in (box.call("HomeLan.Interface", "get") or {}).items()
+                                           if isinstance(v, dict)}, 2500)
+    show("HomeLan.Device.get", lambda: box.call("HomeLan.Device", "get"), 2500)
     show("HomeLan.getResults (interfaces)", lambda: box.call("HomeLan", "getResults", {"NumberOfReadings": 1}))
     path = os.path.expanduser("~/diagnostic-livebox.txt")
     with open(path, "w") as f:
