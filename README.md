@@ -80,8 +80,9 @@ collecteur consomme très peu de ressources.
    nom d'hôte `scangaming`, utilisateur `pi` + un mot de passe, fuseau `Europe/Paris`,
    et dans l'onglet **Services** : **activer SSH** (authentification par mot de passe).
 2. Insérer la carte, **brancher le Pi à la Livebox avec un câble réseau**, puis l'alimenter. Attendre 2 minutes.
-3. **Se connecter au Pi depuis l'iPhone** : dans a-Shell, `ssh pi@scangaming.local`
-   (ou `ssh pi@<IP>` ; l'IP du Pi apparaît dans `python3 trafic.py --liste`).
+3. **Se connecter au Pi** depuis le PC (Windows : ouvrir « Terminal » ou « PowerShell » ;
+   Mac : « Terminal ») ou depuis l'iPhone (app a-Shell) : `ssh pi@scangaming.local`
+   (ou `ssh pi@<IP>` ; l'IP du Pi apparaît dans l'interface de la Livebox).
 4. Sur le Pi :
    ```bash
    sudo apt-get update && sudo apt-get install -y git
