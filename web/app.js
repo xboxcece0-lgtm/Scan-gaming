@@ -66,7 +66,7 @@ function renderLive(devices) {
       <div class="live-bar"><div style="width:${((d.rate_down + d.rate_up) / max) * 100}%"></div></div>
     </div>`).join("") : `<div class="muted">Aucun appareil n’utilise Internet en ce moment.</div>`}
     ${now.length > 8 ? `<div class="muted">… et ${now.length - 8} autres</div>` : ""}</div>
-    <p class="live-note">Débit relevé par la Livebox : toutes les 10 s pour le Wi‑Fi direct, toutes les 30 s pour les autres (câble, switch, répéteur).</p>`;
+    <p class="live-note">Débit relevé par la Livebox : toutes les 10 s pour le Wi‑Fi direct, 30 s pour le câble (switch compris). Derrière un répéteur, le trafic est attribué au répéteur : temps de connexion seulement.</p>`;
 }
 
 function renderToday(usage) {

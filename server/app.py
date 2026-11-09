@@ -123,8 +123,9 @@ def traffic_loop(store: Store, box: Livebox) -> None:
 def homelan_loop(store: Store, box: Livebox) -> None:
     """Débit via les relevés HomeLan de la box (fenêtres de 30 s, par adresse MAC).
 
-    Couvre les appareils filaires — y compris derrière un switch — et ceux connectés
-    via un répéteur. Les clients Wi‑Fi directs gardent la mesure plus réactive des
+    Couvre les appareils filaires, y compris derrière un switch. Les appareils connectés
+    via un répéteur qui traduit les adresses MAC (TP-Link RE305…) ne sont pas mesurables :
+    la box attribue leur trafic au répéteur. Les clients Wi‑Fi directs gardent la mesure plus réactive des
     compteurs Wi‑Fi (traffic_loop). Repli : compteur du port Ethernet si l'appareil
     est seul sur ce port.
     """
